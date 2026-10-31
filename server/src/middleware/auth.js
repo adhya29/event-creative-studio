@@ -27,10 +27,39 @@ module.exports = {
       // 2. Check if Supabase client can verify token
       const supabase = db.getSupabaseClient();
       if (supabase) {
-        supabase.auth.getUser(token).then(({ data: { user }, error }) => {
-          if (!error && user) {
-            req.admin = { id: user.id, email: user.email, role: 'admin' };
-            return next();
+        supabase.auth.getUser(token).then(async ({ data, error }) => {
+          if (!error && data && data.user) {
+            const user = data.user;
+            try {
+              // Strictly verify that this user's UUID is explicitly provisioned in admins table
+              const { data: adminRecord, error: adminErr } = await supabase
+                .from('admins')
+                .select('id, email, role, full_name, is_active')
+                .eq('supabase_user_id', user.id)
+                .eq('is_active', true)
+                .single();
+
+              if (!adminErr && adminRecord) {
+                req.admin = {
+                  id: adminRecord.id,
+                  supabase_user_id: user.id,
+                  email: adminRecord.email,
+                  full_name: adminRecord.full_name,
+                  role: adminRecord.role,
+                };
+                return next();
+              } else {
+                return res.status(403).json({
+                  success: false,
+                  error: 'Access denied. Account is authenticated but has not been granted studio administrator privileges.',
+                });
+              }
+            } catch (queryErr) {
+              return res.status(403).json({
+                success: false,
+                error: 'Administrator authorization check failed.',
+              });
+            }
           } else {
             return res.status(401).json({
               success: false,

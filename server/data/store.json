@@ -12,7 +12,7 @@
         "address": "402, High Street Creative Enclave, Metro Boulevard, City Center",
         "working_hours": "Mon - Sat: 9:00 AM - 7:30 PM"
       },
-      "updated_at": "2026-10-31T17:05:28.888Z"
+      "updated_at": "2026-10-31T17:38:20.396Z"
     },
     {
       "id": "homepage_hero",
@@ -443,6 +443,54 @@
   ],
   "enquiries": [
     {
+      "id": "4a853887-5d4d-4828-9dda-a3f37d2bf372",
+      "full_name": "Aditya Roy Kapoor",
+      "email": "aditya.roy@test.com",
+      "phone": "+91 99112 33445",
+      "interested_service": "Event Photography",
+      "message": "Need full coverage for a 2-day corporate conclave at Grand Hyatt.",
+      "status": "in_progress",
+      "internal_notes": "Spoke with client manager on WhatsApp. Sending rate card today.",
+      "created_at": "2026-10-31T17:38:20.361Z",
+      "updated_at": "2026-10-31T17:38:20.390Z"
+    },
+    {
+      "id": "43889002-1834-46c3-9f61-44c72f9b464b",
+      "full_name": "Quality Review Inspector",
+      "email": "inspector@test.com",
+      "phone": "+91 99999 88888",
+      "interested_service": "Event Photography",
+      "message": "Testing enquiry form submission functionality.",
+      "status": "contacted",
+      "internal_notes": "Quality inspection note: contacted customer.",
+      "created_at": "2026-10-31T17:38:13.346Z",
+      "updated_at": "2026-10-31T17:38:13.380Z"
+    },
+    {
+      "id": "86119366-e640-4fd9-8e22-445be8a99127",
+      "full_name": "Aditya Roy Kapoor",
+      "email": "aditya.roy@test.com",
+      "phone": "+91 99112 33445",
+      "interested_service": "Event Photography",
+      "message": "Need full coverage for a 2-day corporate conclave at Grand Hyatt.",
+      "status": "in_progress",
+      "internal_notes": "Spoke with client manager on WhatsApp. Sending rate card today.",
+      "created_at": "2026-10-31T17:28:28.330Z",
+      "updated_at": "2026-10-31T17:28:28.363Z"
+    },
+    {
+      "id": "ccbf856b-6c4b-431e-b308-f9db2a8bc54b",
+      "full_name": "Quality Review Inspector",
+      "email": "inspector@test.com",
+      "phone": "+91 99999 88888",
+      "interested_service": "Event Photography",
+      "message": "Testing enquiry form submission functionality.",
+      "status": "contacted",
+      "internal_notes": "Quality inspection note: contacted customer.",
+      "created_at": "2026-10-31T17:28:22.409Z",
+      "updated_at": "2026-10-31T17:28:22.447Z"
+    },
+    {
       "id": "8979f428-ce5d-483d-b288-625fb981da41",
       "full_name": "Aditya Roy Kapoor",
       "email": "aditya.roy@test.com",
@@ -530,6 +578,84 @@
     }
   ],
   "quotation_requests": [
+    {
+      "id": "c5b93fb9-84e2-4477-8504-49d35af28e75",
+      "full_name": "Simran & Raj Malhotra",
+      "email": "raj.simran.wedding@test.com",
+      "phone": "+91 98333 44556",
+      "event_type": "Wedding Celebration",
+      "event_date": "2026-11-20",
+      "event_location": "Umaid Bhawan Palace, Jodhpur",
+      "required_services": [
+        "Event Photography",
+        "Event Management",
+        "Banner Design and Printing"
+      ],
+      "estimated_budget": "₹5,00,000 - ₹7,00,000",
+      "additional_requirements": "Drone aerial capture, candid storytelling, stage truss lighting.",
+      "status": "quoted",
+      "internal_notes": "Formal proposal deck sent via email with budget breakdown.",
+      "created_at": "2026-10-31T17:38:20.368Z",
+      "updated_at": "2026-10-31T17:38:20.393Z"
+    },
+    {
+      "id": "39689a71-a60c-44b4-90c8-c6531f51922e",
+      "full_name": "Quality Review Event Organizer",
+      "email": "organizer@test.com",
+      "phone": "+91 98888 77777",
+      "event_type": "Annual Tech Summit",
+      "event_date": "2026-11-20",
+      "event_location": "Grand Convention Hall, Bangalore",
+      "required_services": [
+        "Event Photography",
+        "Event Management"
+      ],
+      "estimated_budget": "₹2,00,000 - ₹3,00,000",
+      "additional_requirements": "Multi-camera setup with stage streaming.",
+      "status": "reviewed",
+      "internal_notes": "Quality inspection note: proposal drafted.",
+      "created_at": "2026-10-31T17:38:13.351Z",
+      "updated_at": "2026-10-31T17:38:13.385Z"
+    },
+    {
+      "id": "3b714733-1aa8-46ec-98dc-571f11cfc81e",
+      "full_name": "Simran & Raj Malhotra",
+      "email": "raj.simran.wedding@test.com",
+      "phone": "+91 98333 44556",
+      "event_type": "Wedding Celebration",
+      "event_date": "2026-11-20",
+      "event_location": "Umaid Bhawan Palace, Jodhpur",
+      "required_services": [
+        "Event Photography",
+        "Event Management",
+        "Banner Design and Printing"
+      ],
+      "estimated_budget": "₹5,00,000 - ₹7,00,000",
+      "additional_requirements": "Drone aerial capture, candid storytelling, stage truss lighting.",
+      "status": "quoted",
+      "internal_notes": "Formal proposal deck sent via email with budget breakdown.",
+      "created_at": "2026-10-31T17:28:28.339Z",
+      "updated_at": "2026-10-31T17:28:28.367Z"
+    },
+    {
+      "id": "267cfdd0-13e4-4219-8909-3447fd631a7d",
+      "full_name": "Quality Review Event Organizer",
+      "email": "organizer@test.com",
+      "phone": "+91 98888 77777",
+      "event_type": "Annual Tech Summit",
+      "event_date": "2026-11-20",
+      "event_location": "Grand Convention Hall, Bangalore",
+      "required_services": [
+        "Event Photography",
+        "Event Management"
+      ],
+      "estimated_budget": "₹2,00,000 - ₹3,00,000",
+      "additional_requirements": "Multi-camera setup with stage streaming.",
+      "status": "reviewed",
+      "internal_notes": "Quality inspection note: proposal drafted.",
+      "created_at": "2026-10-31T17:28:22.415Z",
+      "updated_at": "2026-10-31T17:28:22.451Z"
+    },
     {
       "id": "ba13e512-f337-430f-83ad-86079e29ebe2",
       "full_name": "Simran & Raj Malhotra",

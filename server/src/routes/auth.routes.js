@@ -25,16 +25,33 @@ router.post('/login', async (req, res) => {
           password,
         });
 
-        if (!error && data && data.session) {
-          return res.json({
-            success: true,
-            token: data.session.access_token,
-            user: {
-              id: data.user.id,
-              email: data.user.email,
-              role: 'super_admin',
-            },
-          });
+        if (!error && data && data.session && data.user) {
+          // Strictly verify that the authenticated user is an explicitly provisioned active administrator
+          const { data: adminRecord, error: adminErr } = await supabase
+            .from('admins')
+            .select('id, email, role, full_name, is_active')
+            .eq('supabase_user_id', data.user.id)
+            .eq('is_active', true)
+            .single();
+
+          if (!adminErr && adminRecord) {
+            return res.json({
+              success: true,
+              token: data.session.access_token,
+              user: {
+                id: adminRecord.id,
+                supabase_user_id: data.user.id,
+                email: adminRecord.email,
+                full_name: adminRecord.full_name,
+                role: adminRecord.role,
+              },
+            });
+          } else {
+            return res.status(403).json({
+              success: false,
+              error: 'Access denied. Account is authenticated in Supabase but has not been granted studio administrator privileges.',
+            });
+          }
         }
       } catch (authErr) {
         console.warn('Supabase Auth failed, checking system credentials:', authErr.message);

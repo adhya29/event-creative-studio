@@ -648,4 +648,43 @@ module.exports = {
       recentQuotations: quotations.slice(0, 5),
     };
   },
+
+  // ==========================================
+  // ADMINS HELPER QUERIES
+  // ==========================================
+  async getAdminBySupabaseId(supabaseUserId) {
+    if (isSupabaseConfigured) {
+      try {
+        const { data, error } = await supabase
+          .from('admins')
+          .select('*')
+          .eq('supabase_user_id', supabaseUserId)
+          .eq('is_active', true)
+          .single();
+        if (!error && data) return data;
+      } catch (err) {
+        console.warn('Supabase getAdminBySupabaseId query failed:', err.message);
+      }
+    }
+    const store = getLocalStore();
+    return (store.admins || []).find((a) => a.supabase_user_id === supabaseUserId && a.is_active) || null;
+  },
+
+  async getAdminByEmail(email) {
+    if (isSupabaseConfigured) {
+      try {
+        const { data, error } = await supabase
+          .from('admins')
+          .select('*')
+          .eq('email', email.toLowerCase())
+          .eq('is_active', true)
+          .single();
+        if (!error && data) return data;
+      } catch (err) {
+        console.warn('Supabase getAdminByEmail query failed:', err.message);
+      }
+    }
+    const store = getLocalStore();
+    return (store.admins || []).find((a) => a.email && a.email.toLowerCase() === email.toLowerCase() && a.is_active) || null;
+  },
 };

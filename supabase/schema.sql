@@ -150,7 +150,7 @@ BEGIN
     NEW.updated_at = NOW();
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
 
 DROP TRIGGER IF EXISTS trigger_update_admins_timestamp ON admins;
 CREATE TRIGGER trigger_update_admins_timestamp
@@ -184,7 +184,9 @@ CREATE TRIGGER trigger_update_website_content_timestamp
 
 -- ----------------------------------------------------------------------------
 -- SECURITY HELPER FUNCTION FOR ADMIN AUTHORIZATION
--- Prevents standard authenticated users from acquiring administrative privileges
+-- Enforces UUID-level authentication: strictly checks admins.supabase_user_id = auth.uid()
+-- NEVER grants privileges based only on an email address.
+-- Protected with secure, explicit search_path = public, pg_temp
 -- ----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION is_admin()
 RETURNS BOOLEAN AS $$
@@ -194,11 +196,11 @@ BEGIN
         RETURN true;
     END IF;
 
-    -- 2. If authenticated via Supabase Auth, verify caller is registered as an active admin
+    -- 2. If authenticated via Supabase Auth, verify caller's exact user UUID is an active admin
     IF auth.role() = 'authenticated' THEN
         RETURN EXISTS (
             SELECT 1 FROM public.admins
-            WHERE (public.admins.supabase_user_id = auth.uid() OR LOWER(public.admins.email) = LOWER(auth.jwt() ->> 'email'))
+            WHERE public.admins.supabase_user_id = auth.uid()
               AND public.admins.is_active = true
         );
     END IF;
@@ -206,7 +208,30 @@ BEGIN
     -- Default: Reject access
     RETURN false;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
+
+-- ----------------------------------------------------------------------------
+-- SAFE ADMINISTRATOR BOOTSTRAP FUNCTION
+-- Run this function in the Supabase SQL Editor AFTER creating your user in Supabase Auth.
+-- It securely binds the Supabase Auth user UUID to the admins table with super_admin role.
+-- ----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION bootstrap_admin(
+    target_user_id UUID,
+    admin_email VARCHAR(255),
+    admin_name VARCHAR(255) DEFAULT 'Master Creative Director'
+)
+RETURNS VOID AS $$
+BEGIN
+    INSERT INTO public.admins (supabase_user_id, email, full_name, role, is_active)
+    VALUES (target_user_id, LOWER(TRIM(admin_email)), admin_name, 'super_admin', true)
+    ON CONFLICT (supabase_user_id) DO UPDATE
+    SET email = EXCLUDED.email,
+        full_name = EXCLUDED.full_name,
+        role = 'super_admin',
+        is_active = true,
+        updated_at = NOW();
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
 
 -- ----------------------------------------------------------------------------
 -- ROW LEVEL SECURITY (RLS) ENFORCEMENT & POLICIES
@@ -297,15 +322,11 @@ CREATE POLICY "Admins full access to website content" ON website_content
 -- Idempotent (ON CONFLICT DO NOTHING) — Guaranteed NEVER to overwrite live customizations
 -- ----------------------------------------------------------------------------
 
--- Seed Initial Super Admin Profile (Matches application default admin credentials)
-INSERT INTO admins (email, full_name, role, is_active) VALUES
-(
-    'admin@luminacreative.studio',
-    'Master Creative Director',
-    'super_admin',
-    true
-)
-ON CONFLICT (email) DO NOTHING;
+-- NOTE ON ADMINISTRATOR ACCOUNTS:
+-- Per strict security policy, NO unlinked administrator account is seeded with only an email.
+-- Administrator privileges are NEVER granted merely because an email matches.
+-- To provision your administrator account after creating a user in Supabase Auth:
+-- Execute: SELECT bootstrap_admin('PASTE_YOUR_AUTH_USER_UUID', 'admin@luminacreative.studio');
 
 -- Seed Baseline Website Content (Demonstration profile & editorial layout copy)
 INSERT INTO website_content (id, title, data) VALUES
