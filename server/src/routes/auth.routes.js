@@ -15,54 +15,68 @@ router.post('/login', async (req, res) => {
     }
 
     const normalizedEmail = email.trim().toLowerCase();
-
-    // 1. If Supabase is configured, try Supabase Auth sign in
     const supabase = db.getSupabaseClient();
-    if (supabase) {
-      try {
-        const { data, error } = await supabase.auth.signInWithPassword({
-          email: normalizedEmail,
-          password,
+    const isSupabase = db.isSupabaseConfigured();
+
+    // 1. Supabase / Production mode: Authenticate exclusively via Supabase Auth
+    if (isSupabase) {
+      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+        email: normalizedEmail,
+        password,
+      });
+
+      if (authError || !authData || !authData.user || !authData.session) {
+        return res.status(401).json({
+          success: false,
+          error: authError?.message || 'Invalid administrator email or password.',
         });
-
-        if (!error && data && data.session && data.user) {
-          // Strictly verify that the authenticated user is an explicitly provisioned active administrator
-          const { data: adminRecord, error: adminErr } = await supabase
-            .from('admins')
-            .select('id, email, role, full_name, is_active')
-            .eq('supabase_user_id', data.user.id)
-            .eq('is_active', true)
-            .single();
-
-          if (!adminErr && adminRecord) {
-            return res.json({
-              success: true,
-              token: data.session.access_token,
-              user: {
-                id: adminRecord.id,
-                supabase_user_id: data.user.id,
-                email: adminRecord.email,
-                full_name: adminRecord.full_name,
-                role: adminRecord.role,
-              },
-            });
-          } else {
-            return res.status(403).json({
-              success: false,
-              error: 'Access denied. Account is authenticated in Supabase but has not been granted studio administrator privileges.',
-            });
-          }
-        }
-      } catch (authErr) {
-        console.warn('Supabase Auth failed, checking system credentials:', authErr.message);
       }
+
+      // Strictly verify that this user's UUID is an active administrator in the admins table
+      const { data: adminRecord, error: adminErr } = await supabase
+        .from('admins')
+        .select('id, email, role, full_name, is_active')
+        .eq('supabase_user_id', authData.user.id)
+        .eq('is_active', true)
+        .maybeSingle();
+
+      if (adminErr) {
+        return res.status(403).json({
+          success: false,
+          error: 'Administrator verification query failed.',
+        });
+      }
+
+      if (!adminRecord) {
+        return res.status(403).json({
+          success: false,
+          error: 'Access denied. Account is authenticated in Supabase but has not been granted studio administrator privileges.',
+        });
+      }
+
+      return res.json({
+        success: true,
+        token: authData.session.access_token,
+        user: {
+          id: adminRecord.id,
+          supabase_user_id: authData.user.id,
+          email: adminRecord.email,
+          full_name: adminRecord.full_name,
+          role: adminRecord.role,
+        },
+      });
     }
 
-    // 2. Validate against configured admin email & default password (development only)
-    // In production with Supabase configured, custom credentials are disabled
-    // to enforce UUID-bound admin authorization exclusively.
+    // 2. Production safety: Local credentials strictly prohibited in production mode
+    if (config.isProduction) {
+      return res.status(500).json({
+        success: false,
+        error: 'Production authentication configuration error: Supabase is not configured.',
+      });
+    }
+
+    // 3. Development mode fallback: local admin credentials
     if (
-      !supabase &&
       normalizedEmail === config.admin.email.toLowerCase() &&
       password === config.admin.defaultPassword
     ) {
@@ -71,6 +85,7 @@ router.post('/login', async (req, res) => {
           email: normalizedEmail,
           role: 'super_admin',
           full_name: 'Master Creative Director',
+          dev_local: true,
         },
         config.admin.jwtSecret,
         { expiresIn: '7d' }

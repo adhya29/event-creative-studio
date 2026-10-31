@@ -3,6 +3,7 @@ services:
     name: event-creative-studio-api
     env: node
     plan: free
+    healthCheckPath: /api/health
     buildCommand: cd server && npm install
     startCommand: cd server && node src/server.js
     envVars:

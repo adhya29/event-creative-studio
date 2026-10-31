@@ -1,6 +1,8 @@
 // API client for communicating with the Express backend
+// Production-hardened with HTTP status validation, safe error handling, and robust headers
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+const rawApiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+const API_BASE_URL = rawApiUrl.replace(/\/$/, '');
 
 function getAuthHeaders(): HeadersInit {
   const token = localStorage.getItem('lumina_admin_token');
@@ -10,12 +12,58 @@ function getAuthHeaders(): HeadersInit {
   };
 }
 
+/**
+ * Safely parse HTTP response and handle error statuses
+ */
+async function handleResponse<T = any>(res: Response): Promise<T> {
+  const text = await res.text();
+  let json: any = null;
+
+  try {
+    json = text ? JSON.parse(text) : {};
+  } catch {
+    json = { error: text || `HTTP ${res.status}: ${res.statusText}` };
+  }
+
+  if (!res.ok) {
+    const message = json?.error || json?.message || `Request failed with HTTP status ${res.status}`;
+    const error: any = new Error(message);
+    error.status = res.status;
+    error.data = json;
+    throw error;
+  }
+
+  return json as T;
+}
+
+/**
+ * Helper for endpoints that return { success: boolean, ... } where callers
+ * inspect the result object directly for error messages.
+ */
+async function handleStructuredResponse(res: Response): Promise<any> {
+  const text = await res.text();
+  let json: any = null;
+
+  try {
+    json = text ? JSON.parse(text) : {};
+  } catch {
+    json = { success: false, error: text || `HTTP ${res.status}: ${res.statusText}` };
+  }
+
+  if (!res.ok && json.success !== false) {
+    json.success = false;
+    json.error = json.error || json.message || `Request failed with status ${res.status}`;
+  }
+
+  return json;
+}
+
 export const api = {
   // Website Content & Profile
   async getContent() {
     const res = await fetch(`${API_BASE_URL}/content`);
-    const data = await res.json();
-    return data.data || {};
+    const json = await handleResponse<{ success: boolean; data: any }>(res);
+    return json.data || {};
   },
 
   async updateContent(id: string, payload: any) {
@@ -24,28 +72,28 @@ export const api = {
       headers: getAuthHeaders(),
       body: JSON.stringify(payload),
     });
-    return res.json();
+    return handleResponse(res);
   },
 
   // Services
   async getServices() {
     const res = await fetch(`${API_BASE_URL}/services`);
-    const data = await res.json();
-    return data.data || [];
+    const json = await handleResponse<{ success: boolean; data: any[] }>(res);
+    return json.data || [];
   },
 
   async getAllServicesAdmin() {
     const res = await fetch(`${API_BASE_URL}/services/all`, {
       headers: getAuthHeaders(),
     });
-    const data = await res.json();
-    return data.data || [];
+    const json = await handleResponse<{ success: boolean; data: any[] }>(res);
+    return json.data || [];
   },
 
   async getService(slugOrId: string) {
     const res = await fetch(`${API_BASE_URL}/services/${slugOrId}`);
-    const data = await res.json();
-    return data.data || null;
+    const json = await handleResponse<{ success: boolean; data: any }>(res);
+    return json.data || null;
   },
 
   async createService(serviceData: any) {
@@ -54,7 +102,7 @@ export const api = {
       headers: getAuthHeaders(),
       body: JSON.stringify(serviceData),
     });
-    return res.json();
+    return handleResponse(res);
   },
 
   async updateService(id: string, serviceData: any) {
@@ -63,7 +111,7 @@ export const api = {
       headers: getAuthHeaders(),
       body: JSON.stringify(serviceData),
     });
-    return res.json();
+    return handleResponse(res);
   },
 
   async deleteService(id: string) {
@@ -71,32 +119,32 @@ export const api = {
       method: 'DELETE',
       headers: getAuthHeaders(),
     });
-    return res.json();
+    return handleResponse(res);
   },
 
   // Portfolio
   async getPortfolioCategories() {
     const res = await fetch(`${API_BASE_URL}/portfolio/categories`);
-    const data = await res.json();
-    return data.data || [];
+    const json = await handleResponse<{ success: boolean; data: any[] }>(res);
+    return json.data || [];
   },
 
   async getPortfolio(category?: string, featured?: boolean) {
     const params = new URLSearchParams();
     if (category && category !== 'all') params.append('category', category);
     if (featured) params.append('featured', 'true');
-    const url = `${API_BASE_URL}/portfolio?${params.toString()}`;
+    const url = `${API_BASE_URL}/portfolio${params.toString() ? `?${params.toString()}` : ''}`;
     const res = await fetch(url);
-    const data = await res.json();
-    return data.data || [];
+    const json = await handleResponse<{ success: boolean; data: any[] }>(res);
+    return json.data || [];
   },
 
   async getAllPortfolioAdmin() {
     const res = await fetch(`${API_BASE_URL}/portfolio/all`, {
       headers: getAuthHeaders(),
     });
-    const data = await res.json();
-    return data.data || [];
+    const json = await handleResponse<{ success: boolean; data: any[] }>(res);
+    return json.data || [];
   },
 
   async createPortfolioItem(itemData: any) {
@@ -105,7 +153,7 @@ export const api = {
       headers: getAuthHeaders(),
       body: JSON.stringify(itemData),
     });
-    return res.json();
+    return handleResponse(res);
   },
 
   async updatePortfolioItem(id: string, itemData: any) {
@@ -114,7 +162,7 @@ export const api = {
       headers: getAuthHeaders(),
       body: JSON.stringify(itemData),
     });
-    return res.json();
+    return handleResponse(res);
   },
 
   async deletePortfolioItem(id: string) {
@@ -122,10 +170,10 @@ export const api = {
       method: 'DELETE',
       headers: getAuthHeaders(),
     });
-    return res.json();
+    return handleResponse(res);
   },
 
-  // Enquiries
+  // Customer Enquiries
   async submitEnquiry(enquiry: {
     full_name: string;
     email: string;
@@ -138,14 +186,14 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(enquiry),
     });
-    return res.json();
+    return handleStructuredResponse(res);
   },
 
   async getEnquiriesAdmin(status?: string) {
     const url = status && status !== 'all' ? `${API_BASE_URL}/enquiries?status=${status}` : `${API_BASE_URL}/enquiries`;
     const res = await fetch(url, { headers: getAuthHeaders() });
-    const data = await res.json();
-    return data.data || [];
+    const json = await handleResponse<{ success: boolean; data: any[] }>(res);
+    return json.data || [];
   },
 
   async updateEnquiryStatus(id: string, status: string, internal_notes?: string) {
@@ -154,7 +202,7 @@ export const api = {
       headers: getAuthHeaders(),
       body: JSON.stringify({ status, internal_notes }),
     });
-    return res.json();
+    return handleResponse(res);
   },
 
   async deleteEnquiry(id: string) {
@@ -162,10 +210,10 @@ export const api = {
       method: 'DELETE',
       headers: getAuthHeaders(),
     });
-    return res.json();
+    return handleResponse(res);
   },
 
-  // Quotations
+  // Customer Quotations
   async submitQuotation(quotation: {
     full_name: string;
     email: string;
@@ -182,14 +230,14 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(quotation),
     });
-    return res.json();
+    return handleStructuredResponse(res);
   },
 
   async getQuotationsAdmin(status?: string) {
     const url = status && status !== 'all' ? `${API_BASE_URL}/quotations?status=${status}` : `${API_BASE_URL}/quotations`;
     const res = await fetch(url, { headers: getAuthHeaders() });
-    const data = await res.json();
-    return data.data || [];
+    const json = await handleResponse<{ success: boolean; data: any[] }>(res);
+    return json.data || [];
   },
 
   async updateQuotationStatus(id: string, status: string, internal_notes?: string) {
@@ -198,7 +246,7 @@ export const api = {
       headers: getAuthHeaders(),
       body: JSON.stringify({ status, internal_notes }),
     });
-    return res.json();
+    return handleResponse(res);
   },
 
   async deleteQuotation(id: string) {
@@ -206,10 +254,10 @@ export const api = {
       method: 'DELETE',
       headers: getAuthHeaders(),
     });
-    return res.json();
+    return handleResponse(res);
   },
 
-  // File Upload
+  // File Upload (Never sets Content-Type for FormData, lets browser set boundary)
   async uploadFile(file: File) {
     const token = localStorage.getItem('lumina_admin_token');
     const formData = new FormData();
@@ -222,7 +270,7 @@ export const api = {
       },
       body: formData,
     });
-    return res.json();
+    return handleStructuredResponse(res);
   },
 
   // Authentication & Admin Dashboard Stats
@@ -232,21 +280,21 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(credentials),
     });
-    return res.json();
+    return handleStructuredResponse(res);
   },
 
   async verifyAuth() {
     const res = await fetch(`${API_BASE_URL}/auth/verify`, {
       headers: getAuthHeaders(),
     });
-    return res.json();
+    return handleStructuredResponse(res);
   },
 
   async getAdminStats() {
     const res = await fetch(`${API_BASE_URL}/admin/stats`, {
       headers: getAuthHeaders(),
     });
-    const data = await res.json();
-    return data.data || null;
+    const json = await handleResponse<{ success: boolean; data: any }>(res);
+    return json.data || null;
   },
 };

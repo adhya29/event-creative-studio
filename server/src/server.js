@@ -4,33 +4,73 @@ const path = require('path');
 const config = require('./config');
 const db = require('./db');
 
-const app = express();
-
-// Production safety: Require Supabase credentials in production mode
-if (config.nodeEnv === 'production' && !db.isSupabaseConfigured()) {
-  console.error('\n❌ FATAL: Production mode requires valid Supabase credentials.');
-  console.error('   Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in environment variables.');
-  console.error('   The local JSON fallback store is NOT permitted in production.\n');
+// Run centralized configuration validation at startup
+try {
+  config.validateConfig();
+} catch (err) {
+  console.error(`\n❌ [STARTUP CONFIG ERROR]\n${err.message}\n`);
   process.exit(1);
 }
 
-// Middleware: Enable CORS
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      // Allow local development ports, Vercel previews, or missing origin (curl/mobile/Postman)
-      callback(null, true);
-    },
-    credentials: true,
-  })
-);
+const app = express();
 
-// Middleware: JSON and URL-encoded body parsers
-app.use(express.json({ limit: '15mb' }));
-app.use(express.urlencoded({ extended: true, limit: '15mb' }));
+// Security headers
+app.disable('x-powered-by');
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  next();
+});
 
-// Static uploads serving
-app.use('/uploads', express.static(config.uploadsDir));
+// Production-hardened CORS configuration
+const allowedDevOrigins = [
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'http://localhost:3000',
+  'http://localhost:4173',
+  config.frontendUrl,
+].filter(Boolean);
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow non-browser requests (curl, server-to-server health checks, automated tests)
+    if (!origin) {
+      return callback(null, true);
+    }
+
+    if (!config.isProduction) {
+      if (allowedDevOrigins.includes(origin) || origin.startsWith('http://localhost:')) {
+        return callback(null, true);
+      }
+      return callback(null, true);
+    }
+
+    // Production: strictly enforce approved origins (configured FRONTEND_URL or Vercel deployment)
+    const isConfiguredOrigin = config.frontendUrl && origin === config.frontendUrl;
+    const isVercelDomain = /^https:\/\/[a-z0-9-]+(\.vercel\.app)$/i.test(origin);
+
+    if (isConfiguredOrigin || isVercelDomain) {
+      return callback(null, true);
+    }
+
+    return callback(new Error(`CORS policy violation: Origin '${origin}' is not allowed.`));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+};
+
+app.use(cors(corsOptions));
+
+// Middleware: JSON and URL-encoded body parsers with safety limits
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Static uploads serving (development only)
+if (!config.isProduction) {
+  app.use('/uploads', express.static(config.uploadsDir));
+}
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
@@ -40,6 +80,7 @@ app.get('/api/health', (req, res) => {
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
     supabaseConnected: db.isSupabaseConfigured(),
+    environment: config.nodeEnv,
   });
 });
 
@@ -64,10 +105,17 @@ app.use('/api/*', (req, res) => {
 // Centralized Global Error Handler
 app.use((err, req, res, next) => {
   console.error('Unhandled server error:', err);
-  const status = err.status || 500;
+  const status = err.status || (err.message && err.message.includes('CORS') ? 403 : 500);
+
+  // In production, do not expose internal database errors or stack traces to clients
+  const safeMessage =
+    config.isProduction && status === 500
+      ? 'An unexpected server error occurred. Please try again later.'
+      : err.message || 'An unexpected error occurred.';
+
   res.status(status).json({
     success: false,
-    error: err.message || 'An unexpected internal server error occurred.',
+    error: safeMessage,
   });
 });
 
@@ -79,7 +127,7 @@ const server = app.listen(PORT, () => {
   console.log(`📡 URL: http://localhost:${PORT}`);
   console.log(`🏥 Health Check: http://localhost:${PORT}/api/health`);
   console.log(`🗄️ Database: ${db.isSupabaseConfigured() ? 'Supabase PostgreSQL' : 'Local Persistent Engine'}`);
-  console.log(`📁 Uploads Directory: ${config.uploadsDir}`);
+  console.log(`🛡️ Environment: ${config.nodeEnv.toUpperCase()}`);
   console.log(`======================================================\n`);
 });
 

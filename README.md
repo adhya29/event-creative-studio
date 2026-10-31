@@ -168,64 +168,83 @@ npm run dev
 
 ## 🗄️ Supabase Database Setup
 
-### Step 1: Create Supabase Project
-1. Go to [supabase.com](https://supabase.com) and sign in.
-2. Click **New Project**, choose your Organization, name it (e.g., `lumina-studio`), set a secure database password, and select your nearest region.
-3. Wait for the project to finish provisioning (usually 1-2 minutes).
+### Verified Project Details
+- **Project Name:** `lumina-creative-studio`
+- **Project URL:** `https://jgfkaahqitncvmdotxgg.supabase.co`
+- **Region:** West EU (Paris) / `eu-west-3`
+- **Compute Tier:** Nano
+- **Organization:** adhyasri Org
 
-### Step 2: Run the Database Schema
-1. In the Supabase Dashboard sidebar, click **SQL Editor**.
-2. Click **New query**.
-3. Open the file `supabase/schema.sql` from this repository. **Copy the entire file contents** and paste into the SQL Editor.
-4. Click **Run**. This creates all 7 tables, indexes, triggers, RLS policies, security functions, and seed data.
+---
 
-The script is idempotent: it uses `CREATE TABLE IF NOT EXISTS`, `ON CONFLICT DO NOTHING`, and `DROP POLICY IF EXISTS` so it can be safely rerun without overwriting your customizations.
+### Step 1: Open Your Existing Supabase Project
+1. Log in to your account at [supabase.com/dashboard](https://supabase.com/dashboard).
+2. Select your existing project: **`lumina-creative-studio`**.
 
-### Step 3: Create Storage Bucket
-1. In the Dashboard sidebar, click **Storage**.
-2. Click **New bucket**.
-3. Name: `studio-media`, toggle **Public bucket** to ON.
-4. Click **Create bucket**.
+### Step 2: Run the Database Schema (All 7 Tables + RLS + Storage)
+1. In the Supabase Dashboard left sidebar, click **SQL Editor** (icon with `>_`).
+2. Click **New query** (top left).
+3. Open the file `supabase/schema.sql` from this repository on your computer.
+4. Select all contents (`Ctrl+A`), copy (`Ctrl+C`), and paste into the Supabase SQL Editor.
+5. Click **Run** (green button or `Ctrl+Enter`).
+6. You will see: `Success. No rows returned.`
+7. This automatically creates:
+   - All 7 tables (`admins`, `services`, `portfolio_categories`, `portfolio_items`, `enquiries`, `quotation_requests`, `website_content`)
+   - All 13 performance indexes
+   - Automatic `updated_at` triggers
+   - Strict Row-Level Security (RLS) policies protecting customer data
+   - The secure `bootstrap_admin()` verification function
+   - Canonical studio seed data
+   - The `studio-media` Storage bucket with public read access and admin-only upload access
 
-### Step 4: Copy API Credentials
-1. Go to **Project Settings** (gear icon) > **API**.
-2. Copy the **Project URL** > paste into `SUPABASE_URL` in `server/.env`.
-3. Copy the **anon (public)** key > paste into `SUPABASE_ANON_KEY`.
-4. Copy the **service_role (secret)** key > paste into `SUPABASE_SERVICE_ROLE_KEY`.
+### Step 3: Copy Your API Credentials
+1. In the left sidebar, click **Project Settings** (gear icon at the very bottom).
+2. Click **API** under Configuration.
+3. You will see your credentials:
+   - **Project URL:** `https://jgfkaahqitncvmdotxgg.supabase.co`
+   - **anon / public key:** Copy this token.
+   - **service_role / secret key:** Click reveal and copy this token.
+4. Paste these values into your `server/.env` file:
+```env
+SUPABASE_URL=https://jgfkaahqitncvmdotxgg.supabase.co
+SUPABASE_ANON_KEY=your_copied_anon_key
+SUPABASE_SERVICE_ROLE_KEY=your_copied_service_role_key
+SUPABASE_STORAGE_BUCKET=studio-media
+```
+> ⚠️ **CRITICAL SECURITY RULE:** The `SUPABASE_SERVICE_ROLE_KEY` bypasses RLS and must be kept strictly on the backend. Never commit it to GitHub or expose it in frontend code.
 
-> **SECURITY:** The service_role key has full database access. Never expose it in frontend code.
+### Step 4: Create Your Administrator Account
 
-### Step 5: Bootstrap Your Administrator Account
+The database strictly requires every administrator to be linked to a genuine Supabase Auth user UUID. Follow these two simple steps:
 
-The database does NOT automatically grant admin privileges to any email address. You must explicitly provision your administrator:
-
-#### 5a. Create a Supabase Auth User
-1. In the Dashboard sidebar, click **Authentication**.
+#### 4a. Create the User in Supabase Authentication
+1. In the left sidebar, click **Authentication** (icon with users).
 2. Click **Add user** > **Create new user**.
-3. Enter your admin email (e.g., `you@yourdomain.com`) and a strong password.
-4. Click **Create user**.
-5. **Copy the user's UUID**: click on the user row, and copy the `User UID` value (looks like `a1b2c3d4-e5f6-7890-abcd-ef1234567890`).
+3. Enter your preferred administrator email (e.g. `admin@luminacreative.studio`) and a strong password.
+4. Toggle "Auto Confirm User?" to **ON** (so email confirmation is not required).
+5. Click **Create user**.
+6. Find the newly created user in the list and click on it.
+7. Copy the **User UID** (a UUID like `e3b0c442-98fc-1c14-9af0-2b901a0e0000`).
 
-#### 5b. Bind the Admin Record
-1. Go to **SQL Editor** > **New query**.
-2. Paste the following, replacing the UUID and email with your actual values:
+#### 4b. Provision Administrator Privileges via SQL Editor
+1. Return to **SQL Editor** in the left sidebar.
+2. Click **New query**.
+3. Run the following command (substitute your real UUID and email):
 ```sql
 SELECT bootstrap_admin(
-  'PASTE-YOUR-USER-UUID-HERE'::uuid,
-  'you@yourdomain.com',
-  'Your Full Name'
+  'PASTE_YOUR_COPIED_UUID_HERE'::uuid,
+  'your_admin_email_here@domain.com',
+  'Master Creative Director'
 );
 ```
-3. Click **Run**. You should see `Success. No rows returned.`
+4. Click **Run**.
+5. The function verifies that the UUID exists in `auth.users` and that the email matches. It activates the user with `super_admin` privileges.
 
-#### 5c. Update Your Backend Environment
-Update `server/.env` with your credentials:
-```env
-ADMIN_EMAIL=you@yourdomain.com
-ADMIN_DEFAULT_PASSWORD=your-strong-password
-```
-
-> **Note:** Once Supabase is connected, the login route authenticates through Supabase Auth and verifies against the `admins` table. The `ADMIN_EMAIL`/`ADMIN_DEFAULT_PASSWORD` variables are only used when Supabase is NOT configured (local development mode).
+### Step 5: Test Admin Login
+1. Start your local servers: `npm run dev`
+2. Navigate to `http://localhost:5173/admin`
+3. Enter your Supabase Auth email and password.
+4. You are securely logged in to the command center!
 
 ---
 

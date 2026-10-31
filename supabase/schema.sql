@@ -213,7 +213,12 @@ $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
 -- ----------------------------------------------------------------------------
 -- SAFE ADMINISTRATOR BOOTSTRAP FUNCTION
 -- Run this function in the Supabase SQL Editor AFTER creating your user in Supabase Auth.
--- It securely binds the Supabase Auth user UUID to the admins table with super_admin role.
+-- It strictly verifies that:
+--   1. The target_user_id exists in auth.users
+--   2. The provided email matches the registered email of that auth user
+--   3. Only then is the admin account created or activated with super_admin privileges
+-- Protected with secure search_path = public, auth, pg_temp
+-- Inaccessible to PUBLIC, anon, and authenticated roles.
 -- ----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION bootstrap_admin(
     target_user_id UUID,
@@ -221,23 +226,45 @@ CREATE OR REPLACE FUNCTION bootstrap_admin(
     admin_name VARCHAR(255) DEFAULT 'Master Creative Director'
 )
 RETURNS VOID AS $$
+DECLARE
+    matched_auth_user RECORD;
+    clean_email VARCHAR(255);
 BEGIN
+    clean_email := LOWER(TRIM(admin_email));
+
+    -- 1. Verify that the UUID exists in auth.users
+    SELECT id, email INTO matched_auth_user
+    FROM auth.users
+    WHERE id = target_user_id;
+
+    IF matched_auth_user.id IS NULL THEN
+        RAISE EXCEPTION 'Supabase Auth user with UUID % does not exist. Create the user in Supabase Authentication first before bootstrapping admin privileges.', target_user_id;
+    END IF;
+
+    -- 2. Verify that the supplied email matches the Auth user's email
+    IF LOWER(TRIM(matched_auth_user.email)) <> clean_email THEN
+        RAISE EXCEPTION 'Email mismatch: Supabase Auth user % has email "%" but provided email is "%". Privileges cannot be granted.', target_user_id, matched_auth_user.email, clean_email;
+    END IF;
+
+    -- 3. Insert or update the administrator record securely bound to this UUID
     INSERT INTO public.admins (supabase_user_id, email, full_name, role, is_active)
-    VALUES (target_user_id, LOWER(TRIM(admin_email)), admin_name, 'super_admin', true)
+    VALUES (target_user_id, clean_email, admin_name, 'super_admin', true)
     ON CONFLICT (supabase_user_id) DO UPDATE
-    SET email = EXCLUDED.email,
+    SET email = clean_email,
         full_name = EXCLUDED.full_name,
         role = 'super_admin',
         is_active = true,
         updated_at = NOW();
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, auth, pg_temp;
 
 -- Restrict bootstrap_admin to database-administrator sessions only.
 -- PUBLIC, anon, and authenticated roles must NEVER be able to call this function.
-REVOKE EXECUTE ON FUNCTION bootstrap_admin(UUID, VARCHAR, VARCHAR) FROM PUBLIC;
-REVOKE EXECUTE ON FUNCTION bootstrap_admin(UUID, VARCHAR, VARCHAR) FROM anon;
-REVOKE EXECUTE ON FUNCTION bootstrap_admin(UUID, VARCHAR, VARCHAR) FROM authenticated;
+REVOKE ALL ON FUNCTION bootstrap_admin(UUID, VARCHAR, VARCHAR) FROM PUBLIC;
+REVOKE ALL ON FUNCTION bootstrap_admin(UUID, VARCHAR, VARCHAR) FROM anon;
+REVOKE ALL ON FUNCTION bootstrap_admin(UUID, VARCHAR, VARCHAR) FROM authenticated;
+GRANT EXECUTE ON FUNCTION bootstrap_admin(UUID, VARCHAR, VARCHAR) TO postgres;
+GRANT EXECUTE ON FUNCTION bootstrap_admin(UUID, VARCHAR, VARCHAR) TO service_role;
 
 -- ----------------------------------------------------------------------------
 -- ROW LEVEL SECURITY (RLS) ENFORCEMENT & POLICIES
@@ -503,3 +530,50 @@ BEGIN
     (cat_design, 'graphic-design', 'Serenity Resorts Brand Identity Suite', 'serenity-resorts-brand-identity-suite', 'Complete luxury brand guidelines, brochure catalog design, menu press layouts, and staff presentation templates.', 'Serenity Escapes (Showcase Case)', '2026-04-02', 'https://images.unsplash.com/photo-1626785774573-4b799315345d?q=80&w=1200&auto=format&fit=crop', true, 12)
     ON CONFLICT (slug) DO NOTHING; -- Preserves existing portfolio customizations on re-runs
 END $$;
+
+-- ----------------------------------------------------------------------------
+-- 8. STORAGE BUCKET INITIALIZATION (studio-media)
+-- Creates the public storage bucket for portfolio and service images
+-- ----------------------------------------------------------------------------
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES (
+    'studio-media',
+    'studio-media',
+    true,
+    10485760, -- 10 MB limit
+    ARRAY['image/jpeg', 'image/png', 'image/webp']
+)
+ON CONFLICT (id) DO UPDATE SET
+    public = true,
+    file_size_limit = 10485760,
+    allowed_mime_types = ARRAY['image/jpeg', 'image/png', 'image/webp'];
+
+-- Storage RLS Policies:
+-- 1. Public can view/download images in studio-media
+DROP POLICY IF EXISTS "Public can view studio-media objects" ON storage.objects;
+CREATE POLICY "Public can view studio-media objects" ON storage.objects
+    FOR SELECT USING (bucket_id = 'studio-media');
+
+-- 2. Authenticated administrators and backend service role can upload images
+DROP POLICY IF EXISTS "Admins can upload studio-media objects" ON storage.objects;
+CREATE POLICY "Admins can upload studio-media objects" ON storage.objects
+    FOR INSERT WITH CHECK (
+        bucket_id = 'studio-media' AND
+        (auth.role() = 'service_role' OR is_admin())
+    );
+
+-- 3. Authenticated administrators and backend service role can update images
+DROP POLICY IF EXISTS "Admins can update studio-media objects" ON storage.objects;
+CREATE POLICY "Admins can update studio-media objects" ON storage.objects
+    FOR UPDATE USING (
+        bucket_id = 'studio-media' AND
+        (auth.role() = 'service_role' OR is_admin())
+    );
+
+-- 4. Authenticated administrators and backend service role can delete images
+DROP POLICY IF EXISTS "Admins can delete studio-media objects" ON storage.objects;
+CREATE POLICY "Admins can delete studio-media objects" ON storage.objects
+    FOR DELETE USING (
+        bucket_id = 'studio-media' AND
+        (auth.role() = 'service_role' OR is_admin())
+    );

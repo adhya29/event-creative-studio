@@ -3,7 +3,7 @@ const config = require('../config');
 const db = require('../db');
 
 module.exports = {
-  requireAdmin(req, res, next) {
+  async requireAdmin(req, res, next) {
     try {
       const authHeader = req.headers.authorization;
       if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -14,76 +14,79 @@ module.exports = {
       }
 
       const token = authHeader.split(' ')[1];
+      const isSupabase = db.isSupabaseConfigured();
 
-      // 1. Check custom JWT (development/local auth only)
-      // In production with Supabase configured, custom JWT path is disabled
-      // to enforce UUID-bound admin authorization exclusively through Supabase Auth.
-      const supabaseActive = db.isSupabaseConfigured();
-      if (!supabaseActive) {
+      // 1. Development mode only: verify local custom JWT when Supabase is not configured
+      if (!config.isProduction && !isSupabase) {
         try {
           const decoded = jwt.verify(token, config.admin.jwtSecret);
           req.admin = decoded;
           return next();
         } catch (jwtErr) {
-          // Not custom JWT — fall through
+          return res.status(401).json({
+            success: false,
+            error: 'Invalid or expired development session token.',
+          });
         }
       }
 
-      // 2. Check if Supabase client can verify token
+      // 2. Production or Supabase-configured mode: Validate token via Supabase Auth
       const supabase = db.getSupabaseClient();
-      if (supabase) {
-        supabase.auth.getUser(token).then(async ({ data, error }) => {
-          if (!error && data && data.user) {
-            const user = data.user;
-            try {
-              // Strictly verify that this user's UUID is explicitly provisioned in admins table
-              const { data: adminRecord, error: adminErr } = await supabase
-                .from('admins')
-                .select('id, email, role, full_name, is_active')
-                .eq('supabase_user_id', user.id)
-                .eq('is_active', true)
-                .single();
-
-              if (!adminErr && adminRecord) {
-                req.admin = {
-                  id: adminRecord.id,
-                  supabase_user_id: user.id,
-                  email: adminRecord.email,
-                  full_name: adminRecord.full_name,
-                  role: adminRecord.role,
-                };
-                return next();
-              } else {
-                return res.status(403).json({
-                  success: false,
-                  error: 'Access denied. Account is authenticated but has not been granted studio administrator privileges.',
-                });
-              }
-            } catch (queryErr) {
-              return res.status(403).json({
-                success: false,
-                error: 'Administrator authorization check failed.',
-              });
-            }
-          } else {
-            return res.status(401).json({
-              success: false,
-              error: 'Invalid or expired authentication session.',
-            });
-          }
-        }).catch(() => {
-          return res.status(401).json({
-            success: false,
-            error: 'Authentication failed.',
-          });
+      if (!supabase) {
+        return res.status(500).json({
+          success: false,
+          error: 'Authentication service unavailable: Supabase client not initialized.',
         });
-        return;
       }
 
-      return res.status(401).json({
-        success: false,
-        error: 'Invalid or expired administrator token.',
-      });
+      let userData = null;
+      try {
+        const { data, error } = await supabase.auth.getUser(token);
+        if (error || !data || !data.user) {
+          return res.status(401).json({
+            success: false,
+            error: 'Invalid or expired authentication session.',
+          });
+        }
+        userData = data.user;
+      } catch (tokenErr) {
+        return res.status(401).json({
+          success: false,
+          error: 'Invalid authentication token.',
+        });
+      }
+
+      // 3. Strictly verify user's UUID in the admins table (UUID-bound admin model)
+      const { data: adminRecord, error: adminErr } = await supabase
+        .from('admins')
+        .select('id, email, role, full_name, is_active')
+        .eq('supabase_user_id', userData.id)
+        .eq('is_active', true)
+        .maybeSingle();
+
+      if (adminErr) {
+        return res.status(403).json({
+          success: false,
+          error: 'Administrator authorization check failed.',
+        });
+      }
+
+      if (!adminRecord) {
+        return res.status(403).json({
+          success: false,
+          error: 'Access denied. Account is authenticated in Supabase but has not been granted studio administrator privileges.',
+        });
+      }
+
+      req.admin = {
+        id: adminRecord.id,
+        supabase_user_id: userData.id,
+        email: adminRecord.email,
+        full_name: adminRecord.full_name,
+        role: adminRecord.role,
+      };
+
+      return next();
     } catch (err) {
       console.error('Auth middleware error:', err);
       return res.status(500).json({ success: false, error: 'Internal server error in authorization' });

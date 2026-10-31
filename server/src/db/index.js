@@ -5,7 +5,18 @@ const { createClient } = require('@supabase/supabase-js');
 const config = require('../config');
 const initialSeed = require('./initialSeed');
 
-// Data storage directory for fallback offline / dev persistence
+// UUID format validation regex (RFC 4122)
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function sanitizeUUID(id) {
+  if (!id) return null;
+  const str = String(id).trim();
+  if (str === '') return null;
+  if (UUID_REGEX.test(str)) return str;
+  return null;
+}
+
+// Data storage directory for fallback development offline persistence
 const dataDir = path.join(__dirname, '../../data');
 const storePath = path.join(dataDir, 'store.json');
 
@@ -14,8 +25,10 @@ if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
 
-// Initialize persistent store if not exists
 function getLocalStore() {
+  if (config.isProduction) {
+    throw new Error('FATAL: Reading from local store.json is strictly forbidden in production mode.');
+  }
   try {
     if (!fs.existsSync(storePath)) {
       fs.writeFileSync(storePath, JSON.stringify(initialSeed, null, 2), 'utf-8');
@@ -30,6 +43,9 @@ function getLocalStore() {
 }
 
 function saveLocalStore(data) {
+  if (config.isProduction) {
+    throw new Error('FATAL: Writing to local store.json is strictly forbidden in production mode.');
+  }
   try {
     fs.writeFileSync(storePath, JSON.stringify(data, null, 2), 'utf-8');
   } catch (err) {
@@ -42,69 +58,85 @@ let supabase = null;
 const isSupabaseConfigured = Boolean(
   config.supabase.url &&
   config.supabase.url.includes('supabase.co') &&
-  (config.supabase.serviceRoleKey || config.supabase.anonKey)
+  config.supabase.serviceRoleKey
 );
 
 if (isSupabaseConfigured) {
-  const key = config.supabase.serviceRoleKey || config.supabase.anonKey;
-  supabase = createClient(config.supabase.url, key, {
-    auth: { persistSession: false },
+  supabase = createClient(config.supabase.url, config.supabase.serviceRoleKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    },
   });
   console.log('✅ Supabase PostgreSQL Client initialized with:', config.supabase.url);
 } else {
-  console.log('ℹ️ Running with persistent local database engine (Supabase credentials not yet set).');
+  if (config.isProduction) {
+    console.error('❌ FATAL: Production mode requires valid Supabase credentials (SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY).');
+  } else {
+    console.log('ℹ️ Running in DEVELOPMENT mode with persistent local JSON database (Supabase not configured).');
+  }
 }
 
-// Exported Database Layer
+function assertDatabaseAvailable() {
+  if (config.isProduction && !isSupabaseConfigured) {
+    throw new Error('Production database error: Supabase is not configured. Live PostgreSQL connection is required.');
+  }
+}
+
 module.exports = {
   isSupabaseConfigured: () => isSupabaseConfigured,
   getSupabaseClient: () => supabase,
+  sanitizeUUID,
 
   // ==========================================
   // WEBSITE CONTENT
   // ==========================================
   async getAllWebsiteContent() {
+    assertDatabaseAvailable();
     if (isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase.from('website_content').select('*');
-        if (!error && data && data.length > 0) return data;
-      } catch (err) {
-        console.warn('Supabase query failed, falling back to local store:', err.message);
+      const { data, error } = await supabase.from('website_content').select('*');
+      if (error) {
+        throw new Error(`Failed to fetch website content from Supabase: ${error.message}`);
       }
+      return data || [];
     }
+
     const store = getLocalStore();
     return store.website_content || [];
   },
 
   async getWebsiteContent(id) {
+    assertDatabaseAvailable();
     if (isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase.from('website_content').select('*').eq('id', id).single();
-        if (!error && data) return data;
-      } catch (err) {
-        console.warn('Supabase query failed, falling back to local store:', err.message);
+      const { data, error } = await supabase.from('website_content').select('*').eq('id', id).maybeSingle();
+      if (error) {
+        throw new Error(`Failed to fetch website content "${id}" from Supabase: ${error.message}`);
       }
+      return data || null;
     }
+
     const store = getLocalStore();
-    return store.website_content.find((item) => item.id === id) || null;
+    return store.website_content?.find((item) => item.id === id) || null;
   },
 
   async updateWebsiteContent(id, dataPayload) {
+    assertDatabaseAvailable();
     const updatedAt = new Date().toISOString();
+
     if (isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase
-          .from('website_content')
-          .upsert({ id, data: dataPayload, updated_at: updatedAt })
-          .select()
-          .single();
-        if (!error && data) return data;
-      } catch (err) {
-        console.warn('Supabase upsert failed, updating local store:', err.message);
+      const { data, error } = await supabase
+        .from('website_content')
+        .upsert({ id, data: dataPayload, updated_at: updatedAt })
+        .select()
+        .single();
+      if (error) {
+        throw new Error(`Failed to update website content "${id}" in Supabase: ${error.message}`);
       }
+      return data;
     }
+
     const store = getLocalStore();
-    const index = store.website_content.findIndex((item) => item.id === id);
+    const index = (store.website_content || []).findIndex((item) => item.id === id);
     if (index >= 0) {
       store.website_content[index] = {
         ...store.website_content[index],
@@ -127,18 +159,19 @@ module.exports = {
   // SERVICES
   // ==========================================
   async getServices({ publishedOnly = true } = {}) {
+    assertDatabaseAvailable();
     if (isSupabaseConfigured) {
-      try {
-        let query = supabase.from('services').select('*').order('order_index', { ascending: true });
-        if (publishedOnly) {
-          query = query.eq('is_published', true);
-        }
-        const { data, error } = await query;
-        if (!error && data) return data;
-      } catch (err) {
-        console.warn('Supabase query failed, falling back to local store:', err.message);
+      let query = supabase.from('services').select('*').order('order_index', { ascending: true });
+      if (publishedOnly) {
+        query = query.eq('is_published', true);
       }
+      const { data, error } = await query;
+      if (error) {
+        throw new Error(`Failed to fetch services from Supabase: ${error.message}`);
+      }
+      return data || [];
     }
+
     const store = getLocalStore();
     let items = store.services || [];
     if (publishedOnly) {
@@ -148,32 +181,35 @@ module.exports = {
   },
 
   async getServiceBySlug(slug) {
+    assertDatabaseAvailable();
     if (isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase.from('services').select('*').eq('slug', slug).single();
-        if (!error && data) return data;
-      } catch (err) {
-        console.warn('Supabase query failed, falling back to local store:', err.message);
+      const { data, error } = await supabase.from('services').select('*').eq('slug', slug).maybeSingle();
+      if (error) {
+        throw new Error(`Failed to fetch service by slug "${slug}" from Supabase: ${error.message}`);
       }
+      return data || null;
     }
+
     const store = getLocalStore();
-    return store.services.find((s) => s.slug === slug) || null;
+    return store.services?.find((s) => s.slug === slug) || null;
   },
 
   async getServiceById(id) {
+    assertDatabaseAvailable();
     if (isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase.from('services').select('*').eq('id', id).single();
-        if (!error && data) return data;
-      } catch (err) {
-        console.warn('Supabase query failed, falling back to local store:', err.message);
+      const { data, error } = await supabase.from('services').select('*').eq('id', id).maybeSingle();
+      if (error) {
+        throw new Error(`Failed to fetch service by ID from Supabase: ${error.message}`);
       }
+      return data || null;
     }
+
     const store = getLocalStore();
-    return store.services.find((s) => s.id === id) || null;
+    return store.services?.find((s) => s.id === id) || null;
   },
 
   async createService(serviceData) {
+    assertDatabaseAvailable();
     const newService = {
       id: uuidv4(),
       slug: serviceData.slug || serviceData.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''),
@@ -192,12 +228,11 @@ module.exports = {
     };
 
     if (isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase.from('services').insert([newService]).select().single();
-        if (!error && data) return data;
-      } catch (err) {
-        console.warn('Supabase insert failed, saving to local store:', err.message);
+      const { data, error } = await supabase.from('services').insert([newService]).select().single();
+      if (error) {
+        throw new Error(`Failed to create service in Supabase: ${error.message}`);
       }
+      return data;
     }
 
     const store = getLocalStore();
@@ -207,16 +242,16 @@ module.exports = {
   },
 
   async updateService(id, updates) {
+    assertDatabaseAvailable();
     const updatedAt = new Date().toISOString();
     const updatedPayload = { ...updates, updated_at: updatedAt };
 
     if (isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase.from('services').update(updatedPayload).eq('id', id).select().single();
-        if (!error && data) return data;
-      } catch (err) {
-        console.warn('Supabase update failed, updating local store:', err.message);
+      const { data, error } = await supabase.from('services').update(updatedPayload).eq('id', id).select().maybeSingle();
+      if (error) {
+        throw new Error(`Failed to update service in Supabase: ${error.message}`);
       }
+      return data || null;
     }
 
     const store = getLocalStore();
@@ -229,13 +264,13 @@ module.exports = {
   },
 
   async deleteService(id) {
+    assertDatabaseAvailable();
     if (isSupabaseConfigured) {
-      try {
-        const { error } = await supabase.from('services').delete().eq('id', id);
-        if (!error) return true;
-      } catch (err) {
-        console.warn('Supabase delete failed, deleting from local store:', err.message);
+      const { error } = await supabase.from('services').delete().eq('id', id);
+      if (error) {
+        throw new Error(`Failed to delete service from Supabase: ${error.message}`);
       }
+      return true;
     }
 
     const store = getLocalStore();
@@ -251,19 +286,21 @@ module.exports = {
   // PORTFOLIO & CATEGORIES
   // ==========================================
   async getPortfolioCategories() {
+    assertDatabaseAvailable();
     if (isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase.from('portfolio_categories').select('*').order('order_index', { ascending: true });
-        if (!error && data) return data;
-      } catch (err) {
-        console.warn('Supabase query failed, falling back to local store:', err.message);
+      const { data, error } = await supabase.from('portfolio_categories').select('*').order('order_index', { ascending: true });
+      if (error) {
+        throw new Error(`Failed to fetch portfolio categories from Supabase: ${error.message}`);
       }
+      return data || [];
     }
+
     const store = getLocalStore();
     return store.portfolio_categories || [];
   },
 
   async createPortfolioCategory(catData) {
+    assertDatabaseAvailable();
     const newCat = {
       id: uuidv4(),
       name: catData.name,
@@ -274,12 +311,11 @@ module.exports = {
     };
 
     if (isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase.from('portfolio_categories').insert([newCat]).select().single();
-        if (!error && data) return data;
-      } catch (err) {
-        console.warn('Supabase category insert failed:', err.message);
+      const { data, error } = await supabase.from('portfolio_categories').insert([newCat]).select().single();
+      if (error) {
+        throw new Error(`Failed to create portfolio category in Supabase: ${error.message}`);
       }
+      return data;
     }
 
     const store = getLocalStore();
@@ -289,21 +325,20 @@ module.exports = {
   },
 
   async getPortfolioItems({ category, featuredOnly = false, publishedOnly = true } = {}) {
+    assertDatabaseAvailable();
     if (isSupabaseConfigured) {
-      try {
-        let query = supabase.from('portfolio_items').select('*').order('order_index', { ascending: true });
-        if (publishedOnly) query = query.eq('is_published', true);
-        if (featuredOnly) query = query.eq('is_featured', true);
-        const { data, error } = await query;
-        if (!error && data) {
-          if (category && category !== 'all') {
-            return data.filter((item) => item.category_slug === category || item.category_id === category);
-          }
-          return data;
-        }
-      } catch (err) {
-        console.warn('Supabase query failed, falling back to local store:', err.message);
+      let query = supabase.from('portfolio_items').select('*').order('order_index', { ascending: true });
+      if (publishedOnly) query = query.eq('is_published', true);
+      if (featuredOnly) query = query.eq('is_featured', true);
+      const { data, error } = await query;
+      if (error) {
+        throw new Error(`Failed to fetch portfolio items from Supabase: ${error.message}`);
       }
+      let items = data || [];
+      if (category && category !== 'all') {
+        items = items.filter((item) => item.category_slug === category || item.category_id === category);
+      }
+      return items;
     }
 
     const store = getLocalStore();
@@ -317,25 +352,30 @@ module.exports = {
   },
 
   async getPortfolioItemById(id) {
+    assertDatabaseAvailable();
     if (isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase.from('portfolio_items').select('*').eq('id', id).single();
-        if (!error && data) return data;
-      } catch (err) {
-        console.warn('Supabase query failed:', err.message);
+      const { data, error } = await supabase.from('portfolio_items').select('*').eq('id', id).maybeSingle();
+      if (error) {
+        throw new Error(`Failed to fetch portfolio item by ID from Supabase: ${error.message}`);
       }
+      return data || null;
     }
+
     const store = getLocalStore();
-    return store.portfolio_items.find((p) => p.id === id) || null;
+    return store.portfolio_items?.find((p) => p.id === id) || null;
   },
 
   async createPortfolioItem(itemData) {
+    assertDatabaseAvailable();
+    // CRITICAL: Ensure category_id is either a valid UUID or null, NEVER empty string
+    const validCategoryId = sanitizeUUID(itemData.category_id);
+
     const newItem = {
       id: uuidv4(),
-      category_id: itemData.category_id || '',
+      category_id: validCategoryId,
       category_slug: itemData.category_slug || itemData.category || '',
       title: itemData.title,
-      slug: itemData.slug || itemData.title.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+      slug: itemData.slug || itemData.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''),
       description: itemData.description || '',
       client_name: itemData.client_name || '',
       event_date: itemData.event_date || new Date().toISOString().split('T')[0],
@@ -349,12 +389,11 @@ module.exports = {
     };
 
     if (isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase.from('portfolio_items').insert([newItem]).select().single();
-        if (!error && data) return data;
-      } catch (err) {
-        console.warn('Supabase portfolio item insert failed:', err.message);
+      const { data, error } = await supabase.from('portfolio_items').insert([newItem]).select().single();
+      if (error) {
+        throw new Error(`Failed to create portfolio item in Supabase: ${error.message}`);
       }
+      return data;
     }
 
     const store = getLocalStore();
@@ -364,16 +403,21 @@ module.exports = {
   },
 
   async updatePortfolioItem(id, updates) {
+    assertDatabaseAvailable();
     const updatedAt = new Date().toISOString();
     const updatedPayload = { ...updates, updated_at: updatedAt };
 
+    // CRITICAL: Ensure category_id is valid UUID or null if provided
+    if ('category_id' in updatedPayload) {
+      updatedPayload.category_id = sanitizeUUID(updatedPayload.category_id);
+    }
+
     if (isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase.from('portfolio_items').update(updatedPayload).eq('id', id).select().single();
-        if (!error && data) return data;
-      } catch (err) {
-        console.warn('Supabase portfolio update failed:', err.message);
+      const { data, error } = await supabase.from('portfolio_items').update(updatedPayload).eq('id', id).select().maybeSingle();
+      if (error) {
+        throw new Error(`Failed to update portfolio item in Supabase: ${error.message}`);
       }
+      return data || null;
     }
 
     const store = getLocalStore();
@@ -386,13 +430,13 @@ module.exports = {
   },
 
   async deletePortfolioItem(id) {
+    assertDatabaseAvailable();
     if (isSupabaseConfigured) {
-      try {
-        const { error } = await supabase.from('portfolio_items').delete().eq('id', id);
-        if (!error) return true;
-      } catch (err) {
-        console.warn('Supabase portfolio delete failed:', err.message);
+      const { error } = await supabase.from('portfolio_items').delete().eq('id', id);
+      if (error) {
+        throw new Error(`Failed to delete portfolio item from Supabase: ${error.message}`);
       }
+      return true;
     }
 
     const store = getLocalStore();
@@ -405,18 +449,18 @@ module.exports = {
   },
 
   // ==========================================
-  // ENQUIRIES
+  // ENQUIRIES (Private Customer Leads)
   // ==========================================
   async getEnquiries({ status } = {}) {
+    assertDatabaseAvailable();
     if (isSupabaseConfigured) {
-      try {
-        let query = supabase.from('enquiries').select('*').order('created_at', { ascending: false });
-        if (status && status !== 'all') query = query.eq('status', status);
-        const { data, error } = await query;
-        if (!error && data) return data;
-      } catch (err) {
-        console.warn('Supabase enquiries query failed:', err.message);
+      let query = supabase.from('enquiries').select('*').order('created_at', { ascending: false });
+      if (status && status !== 'all') query = query.eq('status', status);
+      const { data, error } = await query;
+      if (error) {
+        throw new Error(`Failed to fetch enquiries from Supabase: ${error.message}`);
       }
+      return data || [];
     }
 
     const store = getLocalStore();
@@ -428,19 +472,21 @@ module.exports = {
   },
 
   async getEnquiryById(id) {
+    assertDatabaseAvailable();
     if (isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase.from('enquiries').select('*').eq('id', id).single();
-        if (!error && data) return data;
-      } catch (err) {
-        console.warn('Supabase query failed:', err.message);
+      const { data, error } = await supabase.from('enquiries').select('*').eq('id', id).maybeSingle();
+      if (error) {
+        throw new Error(`Failed to fetch enquiry by ID from Supabase: ${error.message}`);
       }
+      return data || null;
     }
+
     const store = getLocalStore();
-    return store.enquiries.find((e) => e.id === id) || null;
+    return store.enquiries?.find((e) => e.id === id) || null;
   },
 
   async createEnquiry(enquiryData) {
+    assertDatabaseAvailable();
     const newEnquiry = {
       id: uuidv4(),
       full_name: enquiryData.full_name,
@@ -455,12 +501,11 @@ module.exports = {
     };
 
     if (isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase.from('enquiries').insert([newEnquiry]).select().single();
-        if (!error && data) return data;
-      } catch (err) {
-        console.warn('Supabase enquiry insert failed:', err.message);
+      const { data, error } = await supabase.from('enquiries').insert([newEnquiry]).select().single();
+      if (error) {
+        throw new Error(`Failed to insert enquiry in Supabase: ${error.message}`);
       }
+      return data;
     }
 
     const store = getLocalStore();
@@ -470,6 +515,7 @@ module.exports = {
   },
 
   async updateEnquiry(id, { status, internal_notes }) {
+    assertDatabaseAvailable();
     const updatedAt = new Date().toISOString();
     const payload = {};
     if (status) payload.status = status;
@@ -477,12 +523,11 @@ module.exports = {
     payload.updated_at = updatedAt;
 
     if (isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase.from('enquiries').update(payload).eq('id', id).select().single();
-        if (!error && data) return data;
-      } catch (err) {
-        console.warn('Supabase enquiry update failed:', err.message);
+      const { data, error } = await supabase.from('enquiries').update(payload).eq('id', id).select().maybeSingle();
+      if (error) {
+        throw new Error(`Failed to update enquiry in Supabase: ${error.message}`);
       }
+      return data || null;
     }
 
     const store = getLocalStore();
@@ -495,13 +540,13 @@ module.exports = {
   },
 
   async deleteEnquiry(id) {
+    assertDatabaseAvailable();
     if (isSupabaseConfigured) {
-      try {
-        const { error } = await supabase.from('enquiries').delete().eq('id', id);
-        if (!error) return true;
-      } catch (err) {
-        console.warn('Supabase enquiry delete failed:', err.message);
+      const { error } = await supabase.from('enquiries').delete().eq('id', id);
+      if (error) {
+        throw new Error(`Failed to delete enquiry from Supabase: ${error.message}`);
       }
+      return true;
     }
 
     const store = getLocalStore();
@@ -514,18 +559,18 @@ module.exports = {
   },
 
   // ==========================================
-  // QUOTATIONS
+  // QUOTATIONS (Private Customer Requests)
   // ==========================================
   async getQuotations({ status } = {}) {
+    assertDatabaseAvailable();
     if (isSupabaseConfigured) {
-      try {
-        let query = supabase.from('quotation_requests').select('*').order('created_at', { ascending: false });
-        if (status && status !== 'all') query = query.eq('status', status);
-        const { data, error } = await query;
-        if (!error && data) return data;
-      } catch (err) {
-        console.warn('Supabase quotations query failed:', err.message);
+      let query = supabase.from('quotation_requests').select('*').order('created_at', { ascending: false });
+      if (status && status !== 'all') query = query.eq('status', status);
+      const { data, error } = await query;
+      if (error) {
+        throw new Error(`Failed to fetch quotations from Supabase: ${error.message}`);
       }
+      return data || [];
     }
 
     const store = getLocalStore();
@@ -537,19 +582,21 @@ module.exports = {
   },
 
   async getQuotationById(id) {
+    assertDatabaseAvailable();
     if (isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase.from('quotation_requests').select('*').eq('id', id).single();
-        if (!error && data) return data;
-      } catch (err) {
-        console.warn('Supabase quotation query failed:', err.message);
+      const { data, error } = await supabase.from('quotation_requests').select('*').eq('id', id).maybeSingle();
+      if (error) {
+        throw new Error(`Failed to fetch quotation by ID from Supabase: ${error.message}`);
       }
+      return data || null;
     }
+
     const store = getLocalStore();
-    return store.quotation_requests.find((q) => q.id === id) || null;
+    return store.quotation_requests?.find((q) => q.id === id) || null;
   },
 
   async createQuotation(quotationData) {
+    assertDatabaseAvailable();
     const newQuotation = {
       id: uuidv4(),
       full_name: quotationData.full_name,
@@ -568,12 +615,11 @@ module.exports = {
     };
 
     if (isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase.from('quotation_requests').insert([newQuotation]).select().single();
-        if (!error && data) return data;
-      } catch (err) {
-        console.warn('Supabase quotation insert failed:', err.message);
+      const { data, error } = await supabase.from('quotation_requests').insert([newQuotation]).select().single();
+      if (error) {
+        throw new Error(`Failed to create quotation request in Supabase: ${error.message}`);
       }
+      return data;
     }
 
     const store = getLocalStore();
@@ -583,6 +629,7 @@ module.exports = {
   },
 
   async updateQuotation(id, { status, internal_notes }) {
+    assertDatabaseAvailable();
     const updatedAt = new Date().toISOString();
     const payload = {};
     if (status) payload.status = status;
@@ -590,12 +637,11 @@ module.exports = {
     payload.updated_at = updatedAt;
 
     if (isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase.from('quotation_requests').update(payload).eq('id', id).select().single();
-        if (!error && data) return data;
-      } catch (err) {
-        console.warn('Supabase quotation update failed:', err.message);
+      const { data, error } = await supabase.from('quotation_requests').update(payload).eq('id', id).select().maybeSingle();
+      if (error) {
+        throw new Error(`Failed to update quotation in Supabase: ${error.message}`);
       }
+      return data || null;
     }
 
     const store = getLocalStore();
@@ -608,13 +654,13 @@ module.exports = {
   },
 
   async deleteQuotation(id) {
+    assertDatabaseAvailable();
     if (isSupabaseConfigured) {
-      try {
-        const { error } = await supabase.from('quotation_requests').delete().eq('id', id);
-        if (!error) return true;
-      } catch (err) {
-        console.warn('Supabase quotation delete failed:', err.message);
+      const { error } = await supabase.from('quotation_requests').delete().eq('id', id);
+      if (error) {
+        throw new Error(`Failed to delete quotation from Supabase: ${error.message}`);
       }
+      return true;
     }
 
     const store = getLocalStore();
@@ -630,6 +676,47 @@ module.exports = {
   // DASHBOARD AGGREGATED METRICS
   // ==========================================
   async getDashboardStats() {
+    assertDatabaseAvailable();
+    if (isSupabaseConfigured) {
+      // Execute parallel count and recent records queries on Supabase
+      const [
+        totalEnqRes,
+        pendingEnqRes,
+        totalQuotRes,
+        pendingQuotRes,
+        totalSrvRes,
+        pubSrvRes,
+        pubPortRes,
+        recentEnqRes,
+        recentQuotRes,
+      ] = await Promise.all([
+        supabase.from('enquiries').select('*', { count: 'exact', head: true }),
+        supabase.from('enquiries').select('*', { count: 'exact', head: true }).in('status', ['new', 'in_progress']),
+        supabase.from('quotation_requests').select('*', { count: 'exact', head: true }),
+        supabase.from('quotation_requests').select('*', { count: 'exact', head: true }).eq('status', 'pending'),
+        supabase.from('services').select('*', { count: 'exact', head: true }),
+        supabase.from('services').select('*', { count: 'exact', head: true }).eq('is_published', true),
+        supabase.from('portfolio_items').select('*', { count: 'exact', head: true }).eq('is_published', true),
+        supabase.from('enquiries').select('*').order('created_at', { ascending: false }).limit(5),
+        supabase.from('quotation_requests').select('*').order('created_at', { ascending: false }).limit(5),
+      ]);
+
+      if (totalEnqRes.error) throw new Error(`Supabase dashboard count error: ${totalEnqRes.error.message}`);
+      if (totalQuotRes.error) throw new Error(`Supabase dashboard count error: ${totalQuotRes.error.message}`);
+
+      return {
+        totalEnquiries: totalEnqRes.count || 0,
+        pendingEnquiries: pendingEnqRes.count || 0,
+        totalQuotations: totalQuotRes.count || 0,
+        pendingQuotations: pendingQuotRes.count || 0,
+        totalServices: totalSrvRes.count || 0,
+        publishedServices: pubSrvRes.count || 0,
+        publishedPortfolio: pubPortRes.count || 0,
+        recentEnquiries: recentEnqRes.data || [],
+        recentQuotations: recentQuotRes.data || [],
+      };
+    }
+
     const store = getLocalStore();
     const enquiries = store.enquiries || [];
     const quotations = store.quotation_requests || [];
@@ -653,37 +740,39 @@ module.exports = {
   // ADMINS HELPER QUERIES
   // ==========================================
   async getAdminBySupabaseId(supabaseUserId) {
+    assertDatabaseAvailable();
     if (isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase
-          .from('admins')
-          .select('*')
-          .eq('supabase_user_id', supabaseUserId)
-          .eq('is_active', true)
-          .single();
-        if (!error && data) return data;
-      } catch (err) {
-        console.warn('Supabase getAdminBySupabaseId query failed:', err.message);
+      const { data, error } = await supabase
+        .from('admins')
+        .select('*')
+        .eq('supabase_user_id', supabaseUserId)
+        .eq('is_active', true)
+        .maybeSingle();
+      if (error) {
+        throw new Error(`Failed to query admin by Supabase Auth UUID: ${error.message}`);
       }
+      return data || null;
     }
+
     const store = getLocalStore();
     return (store.admins || []).find((a) => a.supabase_user_id === supabaseUserId && a.is_active) || null;
   },
 
   async getAdminByEmail(email) {
+    assertDatabaseAvailable();
     if (isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase
-          .from('admins')
-          .select('*')
-          .eq('email', email.toLowerCase())
-          .eq('is_active', true)
-          .single();
-        if (!error && data) return data;
-      } catch (err) {
-        console.warn('Supabase getAdminByEmail query failed:', err.message);
+      const { data, error } = await supabase
+        .from('admins')
+        .select('*')
+        .eq('email', email.toLowerCase())
+        .eq('is_active', true)
+        .maybeSingle();
+      if (error) {
+        throw new Error(`Failed to query admin by email: ${error.message}`);
       }
+      return data || null;
     }
+
     const store = getLocalStore();
     return (store.admins || []).find((a) => a.email && a.email.toLowerCase() === email.toLowerCase() && a.is_active) || null;
   },

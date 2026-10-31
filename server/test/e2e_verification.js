@@ -1,7 +1,11 @@
 // Comprehensive End-to-End System Verification Suite
 const assert = require('assert');
+const path = require('path');
+const fs = require('fs');
 
-const BASE_URL = 'http://localhost:5000/api';
+const BASE_URL = process.env.TEST_API_URL || 'http://localhost:5000/api';
+const TEST_ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@luminacreative.studio';
+const TEST_ADMIN_PASSWORD = process.env.ADMIN_DEFAULT_PASSWORD || 'AdminStudio@2026';
 
 async function runTests() {
   console.log('\n======================================================');
@@ -22,12 +26,16 @@ async function runTests() {
     }
   }
 
-  // 1. Health Check
-  await test('Backend Health Check (/api/health)', async () => {
+  // 1. Health Check & Environment Status
+  let supabaseConnected = false;
+  await test('Backend Health Check & Environment (/api/health)', async () => {
     const res = await fetch(`${BASE_URL}/health`);
     assert.strictEqual(res.status, 200);
     const data = await res.json();
     assert.strictEqual(data.status, 'ok');
+    supabaseConnected = Boolean(data.supabaseConnected);
+    console.log(`   ℹ️ Database Engine: ${supabaseConnected ? 'Supabase PostgreSQL' : 'Local Persistent JSON'}`);
+    console.log(`   ℹ️ Server Environment: ${data.environment || 'development'}`);
   });
 
   // 2. Fetch Public Services
@@ -137,15 +145,15 @@ async function runTests() {
     createdQuotationId = data.data.id;
   });
 
-  // 9. Admin Authentication (Login & JWT Generation)
+  // 9. Admin Authentication (Login & Token Generation)
   let adminToken = '';
   await test('Admin Authentication Login (/api/auth/login)', async () => {
     const res = await fetch(`${BASE_URL}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        email: 'admin@luminacreative.studio',
-        password: 'AdminStudio@2026',
+        email: TEST_ADMIN_EMAIL,
+        password: TEST_ADMIN_PASSWORD,
       }),
     });
     assert.strictEqual(res.status, 200);
@@ -166,13 +174,25 @@ async function runTests() {
     assert.strictEqual(data.user.role, 'super_admin');
   });
 
-  // 11. Unauthorized Access Blocked Without Token
+  // 11. Unauthorized Access Blocked Without Token (401)
   await test('Protected Route Rejection on Missing Token (401)', async () => {
     const res = await fetch(`${BASE_URL}/admin/stats`);
     assert.strictEqual(res.status, 401);
+    const data = await res.json();
+    assert.strictEqual(data.success, false);
   });
 
-  // 12. Admin Dashboard Stats
+  // 12. Unauthorized Access Blocked With Tampered Token (401)
+  await test('Protected Route Rejection on Malformed/Forged Token (401)', async () => {
+    const res = await fetch(`${BASE_URL}/admin/stats`, {
+      headers: { Authorization: 'Bearer forged.invalid.token' },
+    });
+    assert.strictEqual(res.status, 401);
+    const data = await res.json();
+    assert.strictEqual(data.success, false);
+  });
+
+  // 13. Admin Dashboard Stats
   await test('Admin Dashboard KPIs & Metrics (/api/admin/stats)', async () => {
     const res = await fetch(`${BASE_URL}/admin/stats`, {
       headers: { Authorization: `Bearer ${adminToken}` },
@@ -185,7 +205,7 @@ async function runTests() {
     assert.ok(data.data.totalServices >= 6);
   });
 
-  // 13. Service CRUD (Create, Edit, Delete)
+  // 14. Service CRUD (Create, Edit, Delete)
   let testServiceId = '';
   await test('Service CRUD Workflow', async () => {
     // Create
@@ -196,7 +216,7 @@ async function runTests() {
         Authorization: `Bearer ${adminToken}`,
       },
       body: JSON.stringify({
-        title: 'Drone Aerial Cinema',
+        title: 'Automated Test Service',
         category: 'photography',
         short_description: '4K aerial tracking shots for grand outdoor venues.',
         full_description: 'Licensed drone pilots operating dual-sensor quadcopters for cinematic aerial perspectives.',
@@ -222,7 +242,7 @@ async function runTests() {
     const updateData = await updateRes.json();
     assert.strictEqual(updateData.data.starting_price, '₹18,000 / day');
 
-    // Delete
+    // Delete (clean up test service)
     const deleteRes = await fetch(`${BASE_URL}/services/${testServiceId}`, {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${adminToken}` },
@@ -230,7 +250,35 @@ async function runTests() {
     assert.strictEqual(deleteRes.status, 200);
   });
 
-  // 14. Enquiry Status & Internal Notes Update
+  // 15. Portfolio UUID Sanitization Test
+  await test('Portfolio Item Creation with Empty Category ID (UUID Sanitization)', async () => {
+    const res = await fetch(`${BASE_URL}/portfolio`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${adminToken}`,
+      },
+      body: JSON.stringify({
+        title: 'Category UUID Sanitization Test Project',
+        category_id: '', // Empty string should be sanitized to null
+        category_slug: 'photography',
+        image_url: 'https://images.unsplash.com/photo-1519741497674-611481863552',
+        description: 'Testing that empty string category_id does not cause PostgreSQL UUID errors.',
+      }),
+    });
+    assert.strictEqual(res.status, 201);
+    const json = await res.json();
+    assert.strictEqual(json.success, true);
+    assert.strictEqual(json.data.category_id, null);
+
+    // Clean up
+    await fetch(`${BASE_URL}/portfolio/${json.data.id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+  });
+
+  // 16. Enquiry Status & Internal Notes Update
   await test('Enquiry Status Update & Internal Notes', async () => {
     const res = await fetch(`${BASE_URL}/enquiries/${createdEnquiryId}/status`, {
       method: 'PATCH',
@@ -247,9 +295,15 @@ async function runTests() {
     const data = await res.json();
     assert.strictEqual(data.data.status, 'in_progress');
     assert.strictEqual(data.data.internal_notes.includes('WhatsApp'), true);
+
+    // Clean up created test enquiry
+    await fetch(`${BASE_URL}/enquiries/${createdEnquiryId}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
   });
 
-  // 15. Quotation Status & Internal Notes Update
+  // 17. Quotation Status & Internal Notes Update
   await test('Quotation Status Transition & Internal Notes', async () => {
     const res = await fetch(`${BASE_URL}/quotations/${createdQuotationId}/status`, {
       method: 'PATCH',
@@ -265,9 +319,15 @@ async function runTests() {
     assert.strictEqual(res.status, 200);
     const data = await res.json();
     assert.strictEqual(data.data.status, 'quoted');
+
+    // Clean up created test quotation
+    await fetch(`${BASE_URL}/quotations/${createdQuotationId}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
   });
 
-  // 16. Website Content Live Update
+  // 18. Website Content Live Update
   await test('Website Content Customization (/api/content/company_profile)', async () => {
     const res = await fetch(`${BASE_URL}/content/company_profile`, {
       method: 'PUT',
@@ -288,6 +348,19 @@ async function runTests() {
     assert.strictEqual(res.status, 200);
     const data = await res.json();
     assert.strictEqual(data.data.company_name, 'Lumina Creative Studio & Co.');
+  });
+
+  // 19. Production Database Fallback Prevention Unit Check
+  await test('Database Layer Production Fallback Prevention Verification', async () => {
+    const dbModule = require('../src/db');
+    // Ensure sanitizeUUID accurately returns null for non-UUIDs
+    assert.strictEqual(dbModule.sanitizeUUID(''), null);
+    assert.strictEqual(dbModule.sanitizeUUID(null), null);
+    assert.strictEqual(dbModule.sanitizeUUID('invalid-string'), null);
+    assert.strictEqual(
+      dbModule.sanitizeUUID('123e4567-e89b-12d3-a456-426614174000'),
+      '123e4567-e89b-12d3-a456-426614174000'
+    );
   });
 
   console.log('\n======================================================');
