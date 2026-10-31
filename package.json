@@ -1,0 +1,29 @@
+{
+  "name": "event-creative-studio",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Full-stack Event Photography & Creative Services Studio web application and admin portal",
+  "scripts": {
+    "dev": "concurrently -k -p \"[{name}]\" -n \"SERVER,CLIENT\" -c \"yellow.bold,cyan.bold\" \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:server": "cd server && npm run dev",
+    "dev:client": "cd client && npm run dev",
+    "build": "npm run build:client",
+    "build:client": "cd client && npm run build",
+    "start": "cd server && npm start"
+  },
+  "keywords": [
+    "event-photography",
+    "creative-services",
+    "event-management",
+    "print-design",
+    "full-stack",
+    "react",
+    "express",
+    "supabase"
+  ],
+  "author": "Lumina Creative Studio",
+  "license": "ISC",
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
