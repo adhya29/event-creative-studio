@@ -15,13 +15,18 @@ module.exports = {
 
       const token = authHeader.split(' ')[1];
 
-      // 1. Check custom JWT
-      try {
-        const decoded = jwt.verify(token, config.admin.jwtSecret);
-        req.admin = decoded;
-        return next();
-      } catch (jwtErr) {
-        // Not custom JWT, maybe Supabase token or fallback token
+      // 1. Check custom JWT (development/local auth only)
+      // In production with Supabase configured, custom JWT path is disabled
+      // to enforce UUID-bound admin authorization exclusively through Supabase Auth.
+      const supabaseActive = db.isSupabaseConfigured();
+      if (!supabaseActive) {
+        try {
+          const decoded = jwt.verify(token, config.admin.jwtSecret);
+          req.admin = decoded;
+          return next();
+        } catch (jwtErr) {
+          // Not custom JWT — fall through
+        }
       }
 
       // 2. Check if Supabase client can verify token

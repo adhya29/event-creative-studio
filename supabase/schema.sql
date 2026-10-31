@@ -233,6 +233,12 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
 
+-- Restrict bootstrap_admin to database-administrator sessions only.
+-- PUBLIC, anon, and authenticated roles must NEVER be able to call this function.
+REVOKE EXECUTE ON FUNCTION bootstrap_admin(UUID, VARCHAR, VARCHAR) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION bootstrap_admin(UUID, VARCHAR, VARCHAR) FROM anon;
+REVOKE EXECUTE ON FUNCTION bootstrap_admin(UUID, VARCHAR, VARCHAR) FROM authenticated;
+
 -- ----------------------------------------------------------------------------
 -- ROW LEVEL SECURITY (RLS) ENFORCEMENT & POLICIES
 -- ----------------------------------------------------------------------------

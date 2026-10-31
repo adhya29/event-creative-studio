@@ -168,29 +168,79 @@ npm run dev
 
 ## 🗄️ Supabase Database Setup
 
-1. Create a project at [supabase.com](https://supabase.com).
-2. Go to **SQL Editor** in the Supabase Dashboard.
-3. Open `supabase/schema.sql` from this repository, copy the full SQL script, paste it into the editor, and click **Run**.
-4. The script automatically creates:
-   - Tables: `admins`, `services`, `portfolio_categories`, `portfolio_items`, `enquiries`, `quotation_requests`, `website_content`.
-   - Triggers: `update_updated_at_column` for automatic timestamp updates.
-   - Indexes: On slugs, publication flags, and timestamps.
-   - Row Level Security (RLS) policies allowing public reads & submissions while restricting modifications to authenticated administrators.
-   - Comprehensive seed data for all 6 core services, 12 portfolio items, and default studio settings.
-5. In Supabase **Storage**, create a public bucket named `studio-media`.
-6. Copy your **Project URL**, **Anon Key**, and **Service Role Key** from **Project Settings > API** into `server/.env`.
+### Step 1: Create Supabase Project
+1. Go to [supabase.com](https://supabase.com) and sign in.
+2. Click **New Project**, choose your Organization, name it (e.g., `lumina-studio`), set a secure database password, and select your nearest region.
+3. Wait for the project to finish provisioning (usually 1-2 minutes).
+
+### Step 2: Run the Database Schema
+1. In the Supabase Dashboard sidebar, click **SQL Editor**.
+2. Click **New query**.
+3. Open the file `supabase/schema.sql` from this repository. **Copy the entire file contents** and paste into the SQL Editor.
+4. Click **Run**. This creates all 7 tables, indexes, triggers, RLS policies, security functions, and seed data.
+
+The script is idempotent: it uses `CREATE TABLE IF NOT EXISTS`, `ON CONFLICT DO NOTHING`, and `DROP POLICY IF EXISTS` so it can be safely rerun without overwriting your customizations.
+
+### Step 3: Create Storage Bucket
+1. In the Dashboard sidebar, click **Storage**.
+2. Click **New bucket**.
+3. Name: `studio-media`, toggle **Public bucket** to ON.
+4. Click **Create bucket**.
+
+### Step 4: Copy API Credentials
+1. Go to **Project Settings** (gear icon) > **API**.
+2. Copy the **Project URL** > paste into `SUPABASE_URL` in `server/.env`.
+3. Copy the **anon (public)** key > paste into `SUPABASE_ANON_KEY`.
+4. Copy the **service_role (secret)** key > paste into `SUPABASE_SERVICE_ROLE_KEY`.
+
+> **SECURITY:** The service_role key has full database access. Never expose it in frontend code.
+
+### Step 5: Bootstrap Your Administrator Account
+
+The database does NOT automatically grant admin privileges to any email address. You must explicitly provision your administrator:
+
+#### 5a. Create a Supabase Auth User
+1. In the Dashboard sidebar, click **Authentication**.
+2. Click **Add user** > **Create new user**.
+3. Enter your admin email (e.g., `you@yourdomain.com`) and a strong password.
+4. Click **Create user**.
+5. **Copy the user's UUID**: click on the user row, and copy the `User UID` value (looks like `a1b2c3d4-e5f6-7890-abcd-ef1234567890`).
+
+#### 5b. Bind the Admin Record
+1. Go to **SQL Editor** > **New query**.
+2. Paste the following, replacing the UUID and email with your actual values:
+```sql
+SELECT bootstrap_admin(
+  'PASTE-YOUR-USER-UUID-HERE'::uuid,
+  'you@yourdomain.com',
+  'Your Full Name'
+);
+```
+3. Click **Run**. You should see `Success. No rows returned.`
+
+#### 5c. Update Your Backend Environment
+Update `server/.env` with your credentials:
+```env
+ADMIN_EMAIL=you@yourdomain.com
+ADMIN_DEFAULT_PASSWORD=your-strong-password
+```
+
+> **Note:** Once Supabase is connected, the login route authenticates through Supabase Auth and verifies against the `admins` table. The `ADMIN_EMAIL`/`ADMIN_DEFAULT_PASSWORD` variables are only used when Supabase is NOT configured (local development mode).
 
 ---
 
-## 🔐 Administrator Account & Demo Access
+## Administrator Account and Login
 
 Navigate to `/admin` or `/admin/login`.
 
-Use the credentials configured in `server/.env`:
+**Local Development (without Supabase):**
 - **Email:** `admin@luminacreative.studio`
 - **Password:** `AdminStudio@2026`
+- *(A one-click **"Auto-Fill Demo"** button is provided on the login screen for convenience.)*
 
-*(A one-click **"Auto-Fill Demo"** button is provided directly on the login screen for evaluator convenience).*
+**Production (with Supabase):**
+- Use the email and password you created in Supabase Auth (Step 5a above).
+- The admin must also be provisioned via `bootstrap_admin()` (Step 5b above).
 
 ---
 
@@ -286,6 +336,7 @@ node server/test/e2e_verification.js
 
 ## 📝 Limitations & Architectural Notes
 
-1. **Dual-Mode Persistence:** The application features an offline resilient fallback store (`server/data/store.json`). If Supabase credentials are not provided during local evaluation, the application operates with 100% full CRUD functionality without crashing, while seamlessly switching to Supabase PostgreSQL the moment credentials are added.
-2. **Payment Gateway Integration:** The current quotation workflow focuses on detailed lead intake, scope specification, and quotation generation. Direct online deposit payment processing (e.g., Razorpay/Stripe) can be layered into the quotation acceptance stage.
-3. **Email Notifications:** The backend records inquiries and quotations directly to the database. An optional SMTP/Resend transactional email handler can be connected for real-time email dispatch.
+1. **Dual-Mode Persistence:** In development (`NODE_ENV=development`), the application uses a local JSON fallback store (`server/data/store.json`) when Supabase credentials are not provided. In production (`NODE_ENV=production`), Supabase credentials are **required** — the server will refuse to start without them.
+2. **Production Authentication:** In production with Supabase active, the custom JWT login path (email/password from `.env`) is disabled. All authentication goes through Supabase Auth, and administrators must be explicitly provisioned via `bootstrap_admin()`.
+3. **Payment Gateway Integration:** The current quotation workflow focuses on detailed lead intake, scope specification, and quotation generation. Direct online deposit payment processing (e.g., Razorpay/Stripe) can be layered into the quotation acceptance stage.
+4. **Email Notifications:** The backend records inquiries and quotations directly to the database. An optional SMTP/Resend transactional email handler can be connected for real-time email dispatch.

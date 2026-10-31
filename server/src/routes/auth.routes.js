@@ -58,8 +58,11 @@ router.post('/login', async (req, res) => {
       }
     }
 
-    // 2. Validate against configured admin email & default password
+    // 2. Validate against configured admin email & default password (development only)
+    // In production with Supabase configured, custom credentials are disabled
+    // to enforce UUID-bound admin authorization exclusively.
     if (
+      !supabase &&
       normalizedEmail === config.admin.email.toLowerCase() &&
       password === config.admin.defaultPassword
     ) {

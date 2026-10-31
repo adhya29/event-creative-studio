@@ -6,6 +6,14 @@ const db = require('./db');
 
 const app = express();
 
+// Production safety: Require Supabase credentials in production mode
+if (config.nodeEnv === 'production' && !db.isSupabaseConfigured()) {
+  console.error('\n❌ FATAL: Production mode requires valid Supabase credentials.');
+  console.error('   Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in environment variables.');
+  console.error('   The local JSON fallback store is NOT permitted in production.\n');
+  process.exit(1);
+}
+
 // Middleware: Enable CORS
 app.use(
   cors({

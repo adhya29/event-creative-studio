@@ -39,3 +39,6 @@ Thumbs.db
 # Uploads directory (server uploaded assets in dev)
 server/uploads/*
 !server/uploads/.gitkeep
+
+# Local development JSON database (NEVER commit to production)
+server/data/store.json
