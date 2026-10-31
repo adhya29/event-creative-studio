@@ -24,7 +24,7 @@ export const Contact: React.FC = () => {
     'Banner Design and Printing',
     'ID Card Design and Printing',
     'Visiting Card Design and Printing',
-    'Graphic Design & Creative Services',
+    'Graphic Design and Other Creative Services',
     'Full-Package Event Coordination',
     'Other Custom Creative Inquiry',
   ];

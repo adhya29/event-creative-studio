@@ -179,9 +179,16 @@ export const AdminDashboard: React.FC = () => {
                     className="p-3.5 rounded-xl bg-gray-50 border border-charcoal/5 flex items-center justify-between hover:bg-gray-100/70 transition-colors"
                   >
                     <div>
-                      <span className="font-bold text-xs text-burgundy block">
-                        {quot.full_name}
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-bold text-xs text-burgundy block">
+                          {quot.full_name}
+                        </span>
+                        {Boolean(quot.is_demo || String(quot.id).startsWith('quot-00')) && (
+                          <span className="text-[8px] font-bold uppercase px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
+                            Demo
+                          </span>
+                        )}
+                      </div>
                       <span className="text-[11px] text-charcoal-muted">
                         {quot.event_type} &bull; {quot.event_location}
                       </span>
@@ -237,9 +244,16 @@ export const AdminDashboard: React.FC = () => {
                     className="p-3.5 rounded-xl bg-gray-50 border border-charcoal/5 flex items-center justify-between hover:bg-gray-100/70 transition-colors"
                   >
                     <div>
-                      <span className="font-bold text-xs text-burgundy block">
-                        {enq.full_name}
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-bold text-xs text-burgundy block">
+                          {enq.full_name}
+                        </span>
+                        {Boolean(enq.is_demo || String(enq.id).startsWith('enq-00')) && (
+                          <span className="text-[8px] font-bold uppercase px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
+                            Demo
+                          </span>
+                        )}
+                      </div>
                       <span className="text-[11px] text-charcoal-muted truncate max-w-xs block">
                         {enq.interested_service} &bull; {enq.email}
                       </span>

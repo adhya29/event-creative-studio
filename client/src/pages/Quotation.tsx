@@ -19,14 +19,21 @@ export const Quotation: React.FC = () => {
   const preselectedService = searchParams.get('service');
   const { company } = useContent();
 
-  const allAvailableServices = [
+  const defaultServices = [
     'Event Photography',
     'Event Management',
     'Banner Design and Printing',
     'ID Card Design and Printing',
     'Visiting Card Design and Printing',
-    'Graphic Design & Creative Services',
+    'Graphic Design and Other Creative Services',
   ];
+
+  const [availableServices, setAvailableServices] = useState<string[]>(() => {
+    if (preselectedService && !defaultServices.includes(preselectedService)) {
+      return [...defaultServices, preselectedService];
+    }
+    return defaultServices;
+  });
 
   const [formData, setFormData] = useState({
     full_name: '',
@@ -43,6 +50,19 @@ export const Quotation: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Fetch live active services from backend to ensure admin additions appear dynamically
+  useEffect(() => {
+    api.getServices().then((srvList) => {
+      if (srvList && srvList.length > 0) {
+        const titles = srvList.map((s: any) => s.title);
+        if (preselectedService && !titles.includes(preselectedService)) {
+          titles.push(preselectedService);
+        }
+        setAvailableServices(titles);
+      }
+    }).catch((err) => console.warn('Could not fetch dynamic services list:', err));
+  }, [preselectedService]);
 
   // Sync if query param changes
   useEffect(() => {
@@ -331,7 +351,7 @@ export const Quotation: React.FC = () => {
               </p>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {allAvailableServices.map((srv) => {
+                {availableServices.map((srv) => {
                   const selected = formData.required_services.includes(srv);
                   return (
                     <button

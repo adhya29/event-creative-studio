@@ -155,9 +155,16 @@ export const AdminEnquiries: React.FC = () => {
                     className="hover:bg-gray-50 cursor-pointer transition-colors"
                   >
                     <td className="py-3.5 px-4">
-                      <span className="font-bold text-burgundy text-sm block">
-                        {enq.full_name}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-burgundy text-sm block">
+                          {enq.full_name}
+                        </span>
+                        {Boolean(enq.is_demo || String(enq.id).startsWith('enq-00')) && (
+                          <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300">
+                            Demo Record
+                          </span>
+                        )}
+                      </div>
                       <span className="text-[11px] text-charcoal-muted block">
                         {enq.email} &bull; {enq.phone}
                       </span>
@@ -207,6 +214,11 @@ export const AdminEnquiries: React.FC = () => {
 
             <div className="flex items-center gap-3 mb-4">
               {getStatusBadge(selectedEnquiry.status)}
+              {Boolean(selectedEnquiry.is_demo || String(selectedEnquiry.id).startsWith('enq-00')) && (
+                <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300">
+                  Sample Demo Record
+                </span>
+              )}
               <span className="text-[11px] text-charcoal-muted">
                 Received: {new Date(selectedEnquiry.created_at).toLocaleString()}
               </span>

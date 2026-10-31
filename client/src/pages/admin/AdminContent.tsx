@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Save, Sparkles, AlertCircle, Building, Phone, MapPin, Globe, Image as ImageIcon } from 'lucide-react';
 import { useContent } from '../../context/ContentContext';
 import { api } from '../../services/api';
@@ -9,6 +9,19 @@ export const AdminContent: React.FC = () => {
   const [companyForm, setCompanyForm] = useState(company);
   const [heroForm, setHeroForm] = useState(hero);
   const [aboutForm, setAboutForm] = useState(about);
+
+  // Synchronize form states when ContentContext completes initial load or updates
+  useEffect(() => {
+    setCompanyForm(company);
+  }, [company]);
+
+  useEffect(() => {
+    setHeroForm(hero);
+  }, [hero]);
+
+  useEffect(() => {
+    setAboutForm(about);
+  }, [about]);
 
   const [savingSection, setSavingSection] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -331,6 +344,41 @@ export const AdminContent: React.FC = () => {
                 placeholder="Full-Service Creative Agency"
                 className="w-full px-3.5 py-2.5 bg-gray-50 border border-charcoal/20 rounded-xl outline-none focus:border-burgundy"
               />
+            </div>
+
+            <div>
+              <label className="block font-bold text-burgundy uppercase tracking-wider mb-2">
+                Fast Stats Row (Studio Metrics & Benchmarks)
+              </label>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {(heroForm.stats || []).map((st, sIdx) => (
+                  <div key={sIdx} className="p-3 bg-gray-50 border border-charcoal/20 rounded-xl space-y-2">
+                    <span className="text-[10px] uppercase font-bold text-charcoal-muted">Stat #{sIdx + 1}</span>
+                    <input
+                      type="text"
+                      value={st.value}
+                      onChange={(e) => {
+                        const newStats = [...(heroForm.stats || [])];
+                        newStats[sIdx] = { ...newStats[sIdx], value: e.target.value };
+                        setHeroForm({ ...heroForm, stats: newStats });
+                      }}
+                      placeholder="e.g. 850+"
+                      className="w-full px-2.5 py-1.5 bg-white border border-charcoal/20 rounded-lg font-bold"
+                    />
+                    <input
+                      type="text"
+                      value={st.label}
+                      onChange={(e) => {
+                        const newStats = [...(heroForm.stats || [])];
+                        newStats[sIdx] = { ...newStats[sIdx], label: e.target.value };
+                        setHeroForm({ ...heroForm, stats: newStats });
+                      }}
+                      placeholder="e.g. Events Documented"
+                      className="w-full px-2.5 py-1.5 bg-white border border-charcoal/20 rounded-lg text-xs"
+                    />
+                  </div>
+                ))}
+              </div>
             </div>
 
             <div className="pt-4 border-t border-charcoal/10 flex justify-end">
