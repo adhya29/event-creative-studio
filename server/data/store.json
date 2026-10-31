@@ -4,21 +4,15 @@
       "id": "company_profile",
       "title": "General Studio Profile & Branding",
       "data": {
-        "company_name": "Lumina Creative Studio",
+        "company_name": "Lumina Creative Studio & Co.",
         "tagline": "Events Captured. Stories Created.",
         "phone": "+91 98765 43210",
         "email": "contact@luminacreative.studio",
         "whatsapp": "919876543210",
         "address": "402, High Street Creative Enclave, Metro Boulevard, City Center",
-        "working_hours": "Mon - Sat: 9:00 AM - 7:30 PM | Sun: Event Shoots by Appointment",
-        "social_links": {
-          "instagram": "https://instagram.com",
-          "facebook": "https://facebook.com",
-          "linkedin": "https://linkedin.com",
-          "youtube": "https://youtube.com"
-        }
+        "working_hours": "Mon - Sat: 9:00 AM - 7:30 PM"
       },
-      "updated_at": "2026-10-31T15:58:15.400Z"
+      "updated_at": "2026-10-31T16:11:45.800Z"
     },
     {
       "id": "homepage_hero",
@@ -449,6 +443,18 @@
   ],
   "enquiries": [
     {
+      "id": "dc03505d-1edd-4983-9a7f-00a3c83e2e45",
+      "full_name": "Aditya Roy Kapoor",
+      "email": "aditya.roy@test.com",
+      "phone": "+91 99112 33445",
+      "interested_service": "Event Photography",
+      "message": "Need full coverage for a 2-day corporate conclave at Grand Hyatt.",
+      "status": "in_progress",
+      "internal_notes": "Spoke with client manager on WhatsApp. Sending rate card today.",
+      "created_at": "2026-10-31T16:11:45.747Z",
+      "updated_at": "2026-10-31T16:11:45.793Z"
+    },
+    {
       "id": "enq-001",
       "full_name": "Vikramaditya Singhania",
       "email": "vikram@singhaniagroup.com",
@@ -474,6 +480,26 @@
     }
   ],
   "quotation_requests": [
+    {
+      "id": "a7830532-fd5d-4dd1-a238-8ca33bb4f55f",
+      "full_name": "Simran & Raj Malhotra",
+      "email": "raj.simran.wedding@test.com",
+      "phone": "+91 98333 44556",
+      "event_type": "Wedding Celebration",
+      "event_date": "2026-11-20",
+      "event_location": "Umaid Bhawan Palace, Jodhpur",
+      "required_services": [
+        "Event Photography",
+        "Event Management",
+        "Banner Design and Printing"
+      ],
+      "estimated_budget": "₹5,00,000 - ₹7,00,000",
+      "additional_requirements": "Drone aerial capture, candid storytelling, stage truss lighting.",
+      "status": "quoted",
+      "internal_notes": "Formal proposal deck sent via email with budget breakdown.",
+      "created_at": "2026-10-31T16:11:45.756Z",
+      "updated_at": "2026-10-31T16:11:45.796Z"
+    },
     {
       "id": "quot-001",
       "full_name": "Rohan Mehra & Priya Sharma",

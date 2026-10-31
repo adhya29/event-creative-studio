@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: event-creative-studio-api
+    env: node
+    plan: free
+    buildCommand: cd server && npm install
+    startCommand: cd server && node src/server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 5000
+      - key: FRONTEND_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_STORAGE_BUCKET
+        value: studio-media
+      - key: ADMIN_JWT_SECRET
+        generateValue: true
+      - key: ADMIN_EMAIL
+        value: admin@luminacreative.studio
+      - key: ADMIN_DEFAULT_PASSWORD
+        sync: false
