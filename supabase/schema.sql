@@ -1,20 +1,21 @@
 -- ============================================================================
 -- EVENT PHOTOGRAPHY & CREATIVE SERVICES STUDIO — DATABASE SCHEMA (PostgreSQL)
--- Compatible with Supabase PostgreSQL & Standard PostgreSQL 14+
+-- Fully compatible with Supabase PostgreSQL & Standard PostgreSQL 14+
+-- Production-Hardened with Granular Row Level Security (RLS) & Idempotent DDL
 -- ============================================================================
 
--- Enable UUID extension if not already enabled
+-- Enable required cryptographic and UUID extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- ----------------------------------------------------------------------------
--- 1. ADMINS TABLE
+-- 1. ADMINS TABLE (Role-Based Access Control)
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS admins (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    supabase_user_id UUID UNIQUE, -- Links to auth.users if Supabase Auth is active
+    supabase_user_id UUID UNIQUE, -- Linked to auth.users.id when Supabase Auth is utilized
     email VARCHAR(255) UNIQUE NOT NULL,
-    password_hash VARCHAR(255), -- Securely hashed credential fallback
+    password_hash VARCHAR(255),   -- Fallback password hash for custom JWT auth
     full_name VARCHAR(255) NOT NULL DEFAULT 'Studio Administrator',
     role VARCHAR(50) NOT NULL DEFAULT 'super_admin' CHECK (role IN ('super_admin', 'admin', 'editor')),
     is_active BOOLEAN NOT NULL DEFAULT true,
@@ -23,7 +24,7 @@ CREATE TABLE IF NOT EXISTS admins (
 );
 
 -- ----------------------------------------------------------------------------
--- 2. SERVICES TABLE (The 6 Core Creative Services)
+-- 2. SERVICES TABLE (The 6 Mandatory Creative Disciplines)
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS services (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -60,6 +61,7 @@ CREATE TABLE IF NOT EXISTS portfolio_categories (
 CREATE TABLE IF NOT EXISTS portfolio_items (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     category_id UUID REFERENCES portfolio_categories(id) ON DELETE SET NULL,
+    category_slug VARCHAR(100), -- Matches backend query optimization & local DB abstraction
     title VARCHAR(255) NOT NULL,
     slug VARCHAR(255) UNIQUE,
     description TEXT,
@@ -75,7 +77,7 @@ CREATE TABLE IF NOT EXISTS portfolio_items (
 );
 
 -- ----------------------------------------------------------------------------
--- 5. ENQUIRIES TABLE (Customer Contact Inquiries)
+-- 5. ENQUIRIES TABLE (Customer Contact Leads — Private Customer Data)
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS enquiries (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -91,7 +93,7 @@ CREATE TABLE IF NOT EXISTS enquiries (
 );
 
 -- ----------------------------------------------------------------------------
--- 6. QUOTATION REQUESTS TABLE (Customer Event Quotation Inquiries)
+-- 6. QUOTATION REQUESTS TABLE (Customer Event Details & Budget Estimates)
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS quotation_requests (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -114,20 +116,21 @@ CREATE TABLE IF NOT EXISTS quotation_requests (
 -- 7. WEBSITE CONTENT & SETTINGS TABLE
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS website_content (
-    id VARCHAR(100) PRIMARY KEY, -- e.g. 'company_profile', 'homepage_hero', 'contact_details'
+    id VARCHAR(100) PRIMARY KEY, -- 'company_profile', 'homepage_hero', 'about_page'
     title VARCHAR(255),
     data JSONB NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- ----------------------------------------------------------------------------
--- INDEXES FOR PERFORMANCE & QUERY OPTIMIZATION
+-- INDEXES FOR QUERY OPTIMIZATION
 -- ----------------------------------------------------------------------------
 CREATE INDEX IF NOT EXISTS idx_services_slug ON services(slug);
 CREATE INDEX IF NOT EXISTS idx_services_is_published ON services(is_published);
 CREATE INDEX IF NOT EXISTS idx_services_order ON services(order_index);
 
 CREATE INDEX IF NOT EXISTS idx_portfolio_category_id ON portfolio_items(category_id);
+CREATE INDEX IF NOT EXISTS idx_portfolio_category_slug ON portfolio_items(category_slug);
 CREATE INDEX IF NOT EXISTS idx_portfolio_is_published ON portfolio_items(is_published);
 CREATE INDEX IF NOT EXISTS idx_portfolio_is_featured ON portfolio_items(is_featured);
 CREATE INDEX IF NOT EXISTS idx_portfolio_order ON portfolio_items(order_index);
@@ -180,67 +183,135 @@ CREATE TRIGGER trigger_update_website_content_timestamp
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- ----------------------------------------------------------------------------
--- ROW LEVEL SECURITY (RLS) POLICIES
+-- SECURITY HELPER FUNCTION FOR ADMIN AUTHORIZATION
+-- Prevents standard authenticated users from acquiring administrative privileges
 -- ----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION is_admin()
+RETURNS BOOLEAN AS $$
+BEGIN
+    -- 1. Service role (backend server using SUPABASE_SERVICE_ROLE_KEY) is always authorized
+    IF auth.role() = 'service_role' THEN
+        RETURN true;
+    END IF;
+
+    -- 2. If authenticated via Supabase Auth, verify caller is registered as an active admin
+    IF auth.role() = 'authenticated' THEN
+        RETURN EXISTS (
+            SELECT 1 FROM public.admins
+            WHERE (public.admins.supabase_user_id = auth.uid() OR LOWER(public.admins.email) = LOWER(auth.jwt() ->> 'email'))
+              AND public.admins.is_active = true
+        );
+    END IF;
+
+    -- Default: Reject access
+    RETURN false;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+
+-- ----------------------------------------------------------------------------
+-- ROW LEVEL SECURITY (RLS) ENFORCEMENT & POLICIES
+-- ----------------------------------------------------------------------------
+ALTER TABLE admins ENABLE ROW LEVEL SECURITY;
 ALTER TABLE services ENABLE ROW LEVEL SECURITY;
 ALTER TABLE portfolio_categories ENABLE ROW LEVEL SECURITY;
 ALTER TABLE portfolio_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE enquiries ENABLE ROW LEVEL SECURITY;
 ALTER TABLE quotation_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE website_content ENABLE ROW LEVEL SECURITY;
-ALTER TABLE admins ENABLE ROW LEVEL SECURITY;
 
--- Public can read published services, categories, portfolio, and website content
+-- 1. ADMINS TABLE POLICIES (Strictly locked: NO public or non-admin access)
+DROP POLICY IF EXISTS "Admins full access to admins" ON admins;
+CREATE POLICY "Admins full access to admins" ON admins
+    FOR ALL USING (is_admin()) WITH CHECK (is_admin());
+
+-- 2. SERVICES TABLE POLICIES
+DROP POLICY IF EXISTS "Public can view published services" ON services;
 CREATE POLICY "Public can view published services" ON services
-    FOR SELECT USING (is_published = true);
+    FOR SELECT USING (is_published = true OR is_admin());
 
+DROP POLICY IF EXISTS "Admins full access to services" ON services;
+CREATE POLICY "Admins full access to services" ON services
+    FOR ALL USING (is_admin()) WITH CHECK (is_admin());
+
+-- 3. PORTFOLIO CATEGORIES POLICIES
+DROP POLICY IF EXISTS "Public can view portfolio categories" ON portfolio_categories;
 CREATE POLICY "Public can view portfolio categories" ON portfolio_categories
     FOR SELECT USING (true);
 
-CREATE POLICY "Public can view published portfolio items" ON portfolio_items
-    FOR SELECT USING (is_published = true);
+DROP POLICY IF EXISTS "Admins full access to portfolio categories" ON portfolio_categories;
+CREATE POLICY "Admins full access to portfolio categories" ON portfolio_categories
+    FOR ALL USING (is_admin()) WITH CHECK (is_admin());
 
+-- 4. PORTFOLIO ITEMS POLICIES
+DROP POLICY IF EXISTS "Public can view published portfolio items" ON portfolio_items;
+CREATE POLICY "Public can view published portfolio items" ON portfolio_items
+    FOR SELECT USING (is_published = true OR is_admin());
+
+DROP POLICY IF EXISTS "Admins full access to portfolio items" ON portfolio_items;
+CREATE POLICY "Admins full access to portfolio items" ON portfolio_items
+    FOR ALL USING (is_admin()) WITH CHECK (is_admin());
+
+-- 5. ENQUIRIES TABLE POLICIES (Customer privacy protected: NO public reading)
+DROP POLICY IF EXISTS "Public can submit enquiries" ON enquiries;
+CREATE POLICY "Public can submit enquiries" ON enquiries
+    FOR INSERT WITH CHECK (
+        status = 'new' AND
+        (internal_notes IS NULL OR internal_notes = '') AND
+        length(trim(full_name)) >= 2 AND
+        length(trim(email)) >= 5 AND
+        length(trim(phone)) >= 6 AND
+        length(trim(message)) >= 5
+    );
+
+DROP POLICY IF EXISTS "Admins full access to enquiries" ON enquiries;
+CREATE POLICY "Admins full access to enquiries" ON enquiries
+    FOR ALL USING (is_admin()) WITH CHECK (is_admin());
+
+-- 6. QUOTATION REQUESTS POLICIES (Customer privacy protected: NO public reading)
+DROP POLICY IF EXISTS "Public can submit quotation requests" ON quotation_requests;
+CREATE POLICY "Public can submit quotation requests" ON quotation_requests
+    FOR INSERT WITH CHECK (
+        status = 'pending' AND
+        (internal_notes IS NULL OR internal_notes = '') AND
+        length(trim(full_name)) >= 2 AND
+        length(trim(email)) >= 5 AND
+        length(trim(phone)) >= 6 AND
+        length(trim(event_location)) >= 2
+    );
+
+DROP POLICY IF EXISTS "Admins full access to quotation requests" ON quotation_requests;
+CREATE POLICY "Admins full access to quotation requests" ON quotation_requests
+    FOR ALL USING (is_admin()) WITH CHECK (is_admin());
+
+-- 7. WEBSITE CONTENT POLICIES
+DROP POLICY IF EXISTS "Public can view website content" ON website_content;
 CREATE POLICY "Public can view website content" ON website_content
     FOR SELECT USING (true);
 
--- Public can insert new enquiries and quotation requests
-CREATE POLICY "Public can submit enquiries" ON enquiries
-    FOR INSERT WITH CHECK (true);
-
-CREATE POLICY "Public can submit quotation requests" ON quotation_requests
-    FOR INSERT WITH CHECK (true);
-
--- Authenticated admins / service role have full access
-CREATE POLICY "Admins full access to services" ON services
-    FOR ALL USING (auth.role() = 'authenticated' OR auth.role() = 'service_role');
-
-CREATE POLICY "Admins full access to portfolio categories" ON portfolio_categories
-    FOR ALL USING (auth.role() = 'authenticated' OR auth.role() = 'service_role');
-
-CREATE POLICY "Admins full access to portfolio items" ON portfolio_items
-    FOR ALL USING (auth.role() = 'authenticated' OR auth.role() = 'service_role');
-
-CREATE POLICY "Admins full access to enquiries" ON enquiries
-    FOR ALL USING (auth.role() = 'authenticated' OR auth.role() = 'service_role');
-
-CREATE POLICY "Admins full access to quotation requests" ON quotation_requests
-    FOR ALL USING (auth.role() = 'authenticated' OR auth.role() = 'service_role');
-
+DROP POLICY IF EXISTS "Admins full access to website content" ON website_content;
 CREATE POLICY "Admins full access to website content" ON website_content
-    FOR ALL USING (auth.role() = 'authenticated' OR auth.role() = 'service_role');
-
-CREATE POLICY "Admins full access to admins" ON admins
-    FOR ALL USING (auth.role() = 'authenticated' OR auth.role() = 'service_role');
+    FOR ALL USING (is_admin()) WITH CHECK (is_admin());
 
 -- ----------------------------------------------------------------------------
--- SEED DATA (All 6 Mandatory Services, Categories, Real Work, Content)
+-- INITIAL SEED DATA
+-- Idempotent (ON CONFLICT DO NOTHING) — Guaranteed NEVER to overwrite live customizations
 -- ----------------------------------------------------------------------------
 
--- Seed Website Content (Company Profile, Hero, Contact)
+-- Seed Initial Super Admin Profile (Matches application default admin credentials)
+INSERT INTO admins (email, full_name, role, is_active) VALUES
+(
+    'admin@luminacreative.studio',
+    'Master Creative Director',
+    'super_admin',
+    true
+)
+ON CONFLICT (email) DO NOTHING;
+
+-- Seed Baseline Website Content (Demonstration profile & editorial layout copy)
 INSERT INTO website_content (id, title, data) VALUES
 (
     'company_profile',
-    'General Studio Profile & Branding',
+    'General Studio Profile & Branding (Demonstration Template)',
     '{
         "company_name": "Lumina Creative Studio",
         "tagline": "Events Captured. Stories Created.",
@@ -259,7 +330,7 @@ INSERT INTO website_content (id, title, data) VALUES
 ),
 (
     'homepage_hero',
-    'Homepage Hero Configuration',
+    'Homepage Hero Configuration (Demonstration Template)',
     '{
         "headline_line1": "Events",
         "headline_line2": "Captured.",
@@ -277,7 +348,7 @@ INSERT INTO website_content (id, title, data) VALUES
 ),
 (
     'about_page',
-    'About Page Studio Ethos',
+    'About Page Studio Ethos (Demonstration Template)',
     '{
         "story_headline": "Crafting visual permanence for life''s grandest milestones.",
         "story_body": "Founded with a conviction that every celebration and brand milestone deserves cinematic documentation and cohesive visual identity, Lumina Creative Studio bridges high-end event photography with comprehensive print design and event execution under one master roof.",
@@ -285,9 +356,9 @@ INSERT INTO website_content (id, title, data) VALUES
         "equipment_standards": "Dual-card full-frame cinema cameras, prime master glass, calibrated profoto wireless strobes, and certified archival print production."
     }'::jsonb
 )
-ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW();
+ON CONFLICT (id) DO NOTHING; -- Preserves existing customized live content on re-runs
 
--- Seed the 6 Mandatory Services
+-- Seed the 6 Mandatory Creative Services (Canonical catalog)
 INSERT INTO services (title, slug, category, short_description, full_description, features, image_url, starting_price, turnaround_time, order_index) VALUES
 (
     'Event Photography',
@@ -350,7 +421,7 @@ INSERT INTO services (title, slug, category, short_description, full_description
     5
 ),
 (
-    'Graphic Design & Creative Services',
+    'Graphic Design and Other Creative Services',
     'graphic-design-and-other-creative-services',
     'graphic_design',
     'Brand identity design, editorial brochures, social media campaign kits, and bespoke print collateral.',
@@ -361,16 +432,7 @@ INSERT INTO services (title, slug, category, short_description, full_description
     '3 - 5 Days',
     6
 )
-ON CONFLICT (slug) DO UPDATE SET 
-    title = EXCLUDED.title,
-    category = EXCLUDED.category,
-    short_description = EXCLUDED.short_description,
-    full_description = EXCLUDED.full_description,
-    features = EXCLUDED.features,
-    image_url = EXCLUDED.image_url,
-    starting_price = EXCLUDED.starting_price,
-    turnaround_time = EXCLUDED.turnaround_time,
-    order_index = EXCLUDED.order_index;
+ON CONFLICT (slug) DO NOTHING; -- Preserves existing custom price adjustments on re-runs
 
 -- Seed Portfolio Categories
 INSERT INTO portfolio_categories (name, slug, description, order_index) VALUES
@@ -382,7 +444,7 @@ INSERT INTO portfolio_categories (name, slug, description, order_index) VALUES
 ('Brand & Graphic Design', 'graphic-design', 'Brochures, identity suites, and promotional collateral', 6)
 ON CONFLICT (slug) DO NOTHING;
 
--- Seed Portfolio Items (Realistic projects with editorial photography)
+-- Seed Portfolio Items (Demonstration Project Showcase Cases)
 DO $$
 DECLARE
     cat_photo UUID;
@@ -399,18 +461,18 @@ BEGIN
     SELECT id INTO cat_card FROM portfolio_categories WHERE slug = 'visiting-cards' LIMIT 1;
     SELECT id INTO cat_design FROM portfolio_categories WHERE slug = 'graphic-design' LIMIT 1;
 
-    INSERT INTO portfolio_items (category_id, title, slug, description, client_name, event_date, image_url, is_featured, order_index) VALUES
-    (cat_photo, 'The Grand Heritage Royal Wedding', 'grand-heritage-royal-wedding', 'Full 3-day multi-camera royal wedding coverage, capturing traditional ceremonies, royal palace architecture, and candid emotional moments.', 'Ananya & Kabir', '2026-02-14', 'https://images.unsplash.com/photo-1519741497674-611481863552?q=80&w=1200&auto=format&fit=crop', true, 1),
-    (cat_photo, 'TechVanguard Annual Global Summit', 'techvanguard-annual-global-summit', 'Comprehensive keynote documentation, executive panel sessions, and networking reception photography across 4 auditorium halls.', 'TechVanguard Global', '2026-03-22', 'https://images.unsplash.com/photo-1505373877841-8d25f7d46678?q=80&w=1200&auto=format&fit=crop', true, 2),
-    (cat_photo, 'Electric Beats Music Festival', 'electric-beats-music-festival', 'High-energy concert stage photography, dynamic laser lighting capture, and energetic crowd atmosphere documentation.', 'LiveNation Waves', '2026-04-10', 'https://images.unsplash.com/photo-1470225620780-dba8ba36b745?q=80&w=1200&auto=format&fit=crop', true, 3),
-    (cat_event, 'Aura Corporate Excellence Awards', 'aura-corporate-excellence-awards', 'Complete stage construction, curved LED wall integration, intelligent beam lighting, and synchronised audio engineering for 800 executives.', 'Aura Group', '2026-01-20', 'https://images.unsplash.com/photo-1511578314322-379afb476865?q=80&w=1200&auto=format&fit=crop', true, 4),
-    (cat_event, 'Botanical Garden Gala & Fundraiser', 'botanical-garden-gala', 'Enchanting outdoor canopy lighting, acoustic live jazz setup, floral arch design, and VIP table concierge.', 'GreenEarth Trust', '2026-05-05', 'https://images.unsplash.com/photo-1464366400600-7168b8af9bc3?q=80&w=1200&auto=format&fit=crop', false, 5),
-    (cat_banner, 'AutoExpo 2026 Massive Truss Backdrops', 'autoexpo-2026-massive-backdrops', 'Design and large-format installation of 40x15 ft seamless star flex exhibition backdrops and dual-sided directional roll-up standees.', 'Apex Mobility', '2026-02-28', 'https://images.unsplash.com/photo-1542744094-3a31f272c490?q=80&w=1200&auto=format&fit=crop', true, 6),
-    (cat_banner, 'University Fest Entrance Arch & Signage', 'university-fest-entrance-signage', 'Weather-resistant vinyl gate wrap, stage podium branding, and sponsor display pull-up standees.', 'National Institute of Tech', '2026-03-15', 'https://images.unsplash.com/photo-1517245386807-bb43f82c33c4?q=80&w=1200&auto=format&fit=crop', false, 7),
-    (cat_id, 'FinCorp National Staff Badge Ecosystem', 'fincorp-national-staff-badge-ecosystem', 'Design, thermal encoding, and dispatch of 1,200 secure employee PVC badges with customized silk-screened lanyards and cardholders.', 'FinCorp Financial', '2026-01-10', 'https://images.unsplash.com/photo-1589829545856-d10d557cf95f?q=80&w=1200&auto=format&fit=crop', true, 8),
-    (cat_id, 'Global MedTech Symposium Delegate Passes', 'global-medtech-symposium-passes', 'Quick-scan QR delegate badges with high-speed onsite lamination and color-coded access tiers for international physicians.', 'MedTech Council', '2026-04-18', 'https://images.unsplash.com/photo-1588196749597-9ff075ee6b5b?q=80&w=1200&auto=format&fit=crop', false, 9),
-    (cat_card, 'Velvet Gold Foil Executive Cards', 'velvet-gold-foil-executive-cards', '450 GSM velvet matte business cards with hand-stamped gold foil typography and emerald painted edges.', 'Maison Architecture', '2026-03-01', 'https://images.unsplash.com/photo-1589939705384-5185137a7f0f?q=80&w=1200&auto=format&fit=crop', true, 10),
-    (cat_card, 'TapSmart NFC Executive Smart Card', 'tapsmart-nfc-executive-smart-card', 'Matte black metal hybrid card with integrated NTAG216 chip, allowing instant vCard download upon tapping any iOS or Android phone.', 'Venture Pulse Capital', '2026-02-11', 'https://images.unsplash.com/photo-1616469829941-c7200edec809?q=80&w=1200&auto=format&fit=crop', false, 11),
-    (cat_design, 'Serenity Resorts Brand Identity Suite', 'serenity-resorts-brand-identity-suite', 'Complete luxury brand guidelines, brochure catalog design, menu press layouts, and staff presentation templates.', 'Serenity Escapes', '2026-04-02', 'https://images.unsplash.com/photo-1626785774573-4b799315345d?q=80&w=1200&auto=format&fit=crop', true, 12)
-    ON CONFLICT (slug) DO NOTHING;
+    INSERT INTO portfolio_items (category_id, category_slug, title, slug, description, client_name, event_date, image_url, is_featured, order_index) VALUES
+    (cat_photo, 'photography', 'The Grand Heritage Royal Wedding', 'grand-heritage-royal-wedding', 'Full 3-day multi-camera royal wedding coverage, capturing traditional ceremonies, royal palace architecture, and candid emotional moments.', 'Ananya & Kabir (Showcase Commission)', '2026-02-14', 'https://images.unsplash.com/photo-1519741497674-611481863552?q=80&w=1200&auto=format&fit=crop', true, 1),
+    (cat_photo, 'photography', 'TechVanguard Annual Global Summit', 'techvanguard-annual-global-summit', 'Comprehensive keynote documentation, executive panel sessions, and networking reception photography across 4 auditorium halls.', 'TechVanguard Global (Showcase Case)', '2026-03-22', 'https://images.unsplash.com/photo-1505373877841-8d25f7d46678?q=80&w=1200&auto=format&fit=crop', true, 2),
+    (cat_photo, 'photography', 'Electric Beats Music Festival', 'electric-beats-music-festival', 'High-energy concert stage photography, dynamic laser lighting capture, and energetic crowd atmosphere documentation.', 'LiveNation Waves (Showcase Case)', '2026-04-10', 'https://images.unsplash.com/photo-1470225620780-dba8ba36b745?q=80&w=1200&auto=format&fit=crop', true, 3),
+    (cat_event, 'event-management', 'Aura Corporate Excellence Awards', 'aura-corporate-excellence-awards', 'Complete stage construction, curved LED wall integration, intelligent beam lighting, and synchronised audio engineering for 800 executives.', 'Aura Group (Showcase Case)', '2026-01-20', 'https://images.unsplash.com/photo-1511578314322-379afb476865?q=80&w=1200&auto=format&fit=crop', true, 4),
+    (cat_event, 'event-management', 'Botanical Garden Gala & Fundraiser', 'botanical-garden-gala', 'Enchanting outdoor canopy lighting, acoustic live jazz setup, floral arch design, and VIP table concierge.', 'GreenEarth Trust (Showcase Case)', '2026-05-05', 'https://images.unsplash.com/photo-1464366400600-7168b8af9bc3?q=80&w=1200&auto=format&fit=crop', false, 5),
+    (cat_banner, 'banners', 'AutoExpo 2026 Massive Truss Backdrops', 'autoexpo-2026-massive-backdrops', 'Design and large-format installation of 40x15 ft seamless star flex exhibition backdrops and dual-sided directional roll-up standees.', 'Apex Mobility (Showcase Case)', '2026-02-28', 'https://images.unsplash.com/photo-1542744094-3a31f272c490?q=80&w=1200&auto=format&fit=crop', true, 6),
+    (cat_banner, 'banners', 'University Fest Entrance Arch & Signage', 'university-fest-entrance-signage', 'Weather-resistant vinyl gate wrap, stage podium branding, and sponsor display pull-up standees.', 'National Institute of Tech (Showcase Case)', '2026-03-15', 'https://images.unsplash.com/photo-1517245386807-bb43f82c33c4?q=80&w=1200&auto=format&fit=crop', false, 7),
+    (cat_id, 'id-cards', 'FinCorp National Staff Badge Ecosystem', 'fincorp-national-staff-badge-ecosystem', 'Design, thermal encoding, and dispatch of 1,200 secure employee PVC badges with customized silk-screened lanyards and cardholders.', 'FinCorp Financial (Showcase Case)', '2026-01-10', 'https://images.unsplash.com/photo-1589829545856-d10d557cf95f?q=80&w=1200&auto=format&fit=crop', true, 8),
+    (cat_id, 'id-cards', 'Global MedTech Symposium Delegate Passes', 'global-medtech-symposium-passes', 'Quick-scan QR delegate badges with high-speed onsite lamination and color-coded access tiers for international physicians.', 'MedTech Council (Showcase Case)', '2026-04-18', 'https://images.unsplash.com/photo-1588196749597-9ff075ee6b5b?q=80&w=1200&auto=format&fit=crop', false, 9),
+    (cat_card, 'visiting-cards', 'Velvet Gold Foil Executive Cards', 'velvet-gold-foil-executive-cards', '450 GSM velvet matte business cards with hand-stamped gold foil typography and emerald painted edges.', 'Maison Architecture (Showcase Case)', '2026-03-01', 'https://images.unsplash.com/photo-1589939705384-5185137a7f0f?q=80&w=1200&auto=format&fit=crop', true, 10),
+    (cat_card, 'visiting-cards', 'TapSmart NFC Executive Smart Card', 'tapsmart-nfc-executive-smart-card', 'Matte black metal hybrid card with integrated NTAG216 chip, allowing instant vCard download upon tapping any iOS or Android phone.', 'Venture Pulse Capital (Showcase Case)', '2026-02-11', 'https://images.unsplash.com/photo-1616469829941-c7200edec809?q=80&w=1200&auto=format&fit=crop', false, 11),
+    (cat_design, 'graphic-design', 'Serenity Resorts Brand Identity Suite', 'serenity-resorts-brand-identity-suite', 'Complete luxury brand guidelines, brochure catalog design, menu press layouts, and staff presentation templates.', 'Serenity Escapes (Showcase Case)', '2026-04-02', 'https://images.unsplash.com/photo-1626785774573-4b799315345d?q=80&w=1200&auto=format&fit=crop', true, 12)
+    ON CONFLICT (slug) DO NOTHING; -- Preserves existing portfolio customizations on re-runs
 END $$;
